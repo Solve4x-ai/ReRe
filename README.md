@@ -1,6 +1,8 @@
-# ReRe (GameMacroTool)
+# ReRe
 
-Professional, installable Windows macro recorder and player for reliable input automation in protected modern games. Uses low-level SendInput (scan codes + relative mouse deltas) for maximum compatibility with anti-cheat systems.
+Professional, installable Windows macro recorder and player for reliable input automation in protected modern games. Uses low-level **SendInput** (scan codes + relative mouse deltas) for maximum compatibility with anti-cheat systems.
+
+**V1.0** – See [CHANGELOG.md](CHANGELOG.md) for the official checkpoint and tag instructions.
 
 ## Features
 
@@ -35,8 +37,20 @@ The installer creates Start Menu and Desktop shortcuts with “Run as administra
 
 ## Where macros are stored
 
-Macros are saved and loaded from:
+Macros and settings are stored under:
 
-`%APPDATA%\GameMacroTool\macros`
+`%APPDATA%\ReRe\`
 
-(e.g. `C:\Users\<You>\AppData\Roaming\GameMacroTool\macros`).
+- Macros: `%APPDATA%\ReRe\macros`
+- Settings: `%APPDATA%\ReRe\settings.json` (theme, hotkeys, randomization, etc.)
+
+## Anti-cheat and detection
+
+ReRe is designed to minimize detection risk:
+
+- **User-mode only:** Uses Windows `SendInput` (no kernel driver, no injection).
+- **Scan codes + relative mouse:** Same input path as normal hardware; no virtual-key tricks.
+- **Optional randomization:** Timing jitter and mouse pixel noise to avoid perfectly regular patterns.
+- **No playback hooks:** Recording uses pynput; playback uses only SendInput. No DLL or hook-based injection.
+
+Run the app **as administrator** when the target game runs elevated, so input is delivered at the same privilege level.

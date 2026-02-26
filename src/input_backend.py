@@ -1,7 +1,7 @@
 """
 Replaceable input backend: ctypes bindings to user32.dll SendInput.
 Scan codes only (KEYEVENTF_SCANCODE). Mouse: relative deltas in 8-12 px packets.
-Used only for playback (and manual key/click sim); recording uses pynput.
+Optional: 85/15 input mix, null SendInput, QueryPerformanceCounter time (Settings).
 """
 
 import ctypes
@@ -23,9 +23,14 @@ MOUSEEVENTF_RIGHTUP = 0x0010
 MOUSEEVENTF_MIDDLEDOWN = 0x0020
 MOUSEEVENTF_MIDDLEUP = 0x0040
 MOUSEEVENTF_WHEEL = 0x0800
+MOUSEEVENTF_ABSOLUTE = 0x8000
 
-# Load user32
+# Load user32 and kernel32 for QPC
 user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+QueryPerformanceCounter = kernel32.QueryPerformanceCounter
+QueryPerformanceCounter.argtypes = [ctypes.POINTER(ctypes.c_int64)]
+QueryPerformanceCounter.restype = wintypes.BOOL
 
 # --- Structures ---
 class MOUSEINPUT(ctypes.Structure):
@@ -80,6 +85,42 @@ SendInput.restype = wintypes.UINT
 # sizeof(INPUT) for cbSize
 sizeof_INPUT = ctypes.sizeof(INPUT)
 
+# Stealth: insert 1-2 null SendInput between real events (Settings)
+_insert_nulls = False
+_use_qpc = False
+_mix_ratio = 1.0
+_stealth_rng = __import__("random").Random()
+
+
+def _get_time_field() -> int:
+    if _use_qpc:
+        t = ctypes.c_int64()
+        if QueryPerformanceCounter(ctypes.byref(t)):
+            return t.value & 0xFFFFFFFF
+    return 0
+
+
+def _maybe_insert_nulls() -> None:
+    if not _insert_nulls:
+        return
+    for _ in range(_stealth_rng.randint(1, 2)):
+        inp = INPUT()
+        inp.type = INPUT_MOUSE
+        inp.union.mi.dx = 0
+        inp.union.mi.dy = 0
+        inp.union.mi.mouseData = 0
+        inp.union.mi.dwFlags = 0
+        inp.union.mi.time = _get_time_field()
+        inp.union.mi.dwExtraInfo = None
+        SendInput(1, ctypes.byref(inp), sizeof_INPUT)
+
+
+def set_stealth_options(insert_nulls: bool = False, use_qpc: bool = False, mix_ratio: float = 1.0) -> None:
+    global _insert_nulls, _use_qpc, _mix_ratio
+    _insert_nulls = insert_nulls
+    _use_qpc = use_qpc
+    _mix_ratio = max(0.0, min(1.0, mix_ratio))
+
 
 def _get_scan_code_and_flags(sc: int) -> tuple[int, int]:
     """Return (wScan, dwFlags) for KEYBDINPUT. Extended keys have high byte 0xE0."""
@@ -88,28 +129,40 @@ def _get_scan_code_and_flags(sc: int) -> tuple[int, int]:
     return (sc, KEYEVENTF_SCANCODE)
 
 
+def _use_extended_or_normal(sc: int) -> tuple[int, int]:
+    """85% scan-code only; 15% force extended or mix (per Settings mix_ratio)."""
+    w_scan, flags = _get_scan_code_and_flags(sc)
+    if _mix_ratio >= 1.0 or _stealth_rng.random() < _mix_ratio:
+        return (w_scan, flags)
+    if _stealth_rng.random() < 0.5 and sc <= 0xFF:
+        return (w_scan, flags | KEYEVENTF_EXTENDEDKEY)
+    return (w_scan, flags)
+
+
 def key_down(sc: int) -> bool:
     """Send key down for scan code sc. Returns True if SendInput succeeded."""
-    w_scan, flags = _get_scan_code_and_flags(sc)
+    _maybe_insert_nulls()
+    w_scan, flags = _use_extended_or_normal(sc)
     inp = INPUT()
     inp.type = INPUT_KEYBOARD
     inp.union.ki.wVk = 0
     inp.union.ki.wScan = w_scan
     inp.union.ki.dwFlags = flags
-    inp.union.ki.time = 0
+    inp.union.ki.time = _get_time_field()
     inp.union.ki.dwExtraInfo = None
     return SendInput(1, ctypes.byref(inp), sizeof_INPUT) == 1
 
 
 def key_up(sc: int) -> bool:
     """Send key up for scan code sc."""
-    w_scan, flags = _get_scan_code_and_flags(sc)
+    _maybe_insert_nulls()
+    w_scan, flags = _use_extended_or_normal(sc)
     inp = INPUT()
     inp.type = INPUT_KEYBOARD
     inp.union.ki.wVk = 0
     inp.union.ki.wScan = w_scan
     inp.union.ki.dwFlags = flags | KEYEVENTF_KEYUP
-    inp.union.ki.time = 0
+    inp.union.ki.time = _get_time_field()
     inp.union.ki.dwExtraInfo = None
     return SendInput(1, ctypes.byref(inp), sizeof_INPUT) == 1
 
@@ -121,15 +174,21 @@ def key_press(sc: int) -> bool:
 
 def mouse_move_relative(dx: int, dy: int) -> bool:
     """Send one relative mouse move. Caller should chunk large deltas into 8-12 px packets."""
+    _maybe_insert_nulls()
     inp = INPUT()
     inp.type = INPUT_MOUSE
     inp.union.mi.dx = dx
     inp.union.mi.dy = dy
     inp.union.mi.mouseData = 0
     inp.union.mi.dwFlags = MOUSEEVENTF_MOVE
-    inp.union.mi.time = 0
+    inp.union.mi.time = _get_time_field()
     inp.union.mi.dwExtraInfo = None
     return SendInput(1, ctypes.byref(inp), sizeof_INPUT) == 1
+
+
+def send_mouse_move(dx: int, dy: int) -> bool:
+    """Alias for one relative move (used by natural path player)."""
+    return mouse_move_relative(dx, dy)
 
 
 def mouse_move_relative_chunked(dx: int, dy: int, max_step: int = 12) -> bool:
@@ -183,6 +242,13 @@ def mouse_scroll(delta: int) -> bool:
     inp.union.mi.dy = 0
     inp.union.mi.mouseData = delta
     inp.union.mi.dwFlags = MOUSEEVENTF_WHEEL
-    inp.union.mi.time = 0
+    inp.union.mi.time = _get_time_field()
     inp.union.mi.dwExtraInfo = None
     return SendInput(1, ctypes.byref(inp), sizeof_INPUT) == 1
+
+
+def release_all_keys() -> None:
+    """Release any held keys (scan codes we might have pressed). Call on emergency stop / exit."""
+    from src import config
+    for _sc in config.SCAN_CODES.values():
+        key_up(_sc)
