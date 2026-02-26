@@ -96,14 +96,26 @@ def _get_time_field() -> int:
     if _use_qpc:
         t = ctypes.c_int64()
         if QueryPerformanceCounter(ctypes.byref(t)):
-            return t.value & 0xFFFFFFFF
+            val = t.value & 0xFFFFFFFF
+            try:
+                from src import humanization_report
+                humanization_report.report_qpc_used(True, val)
+            except Exception:
+                pass
+            return val
     return 0
 
 
 def _maybe_insert_nulls() -> None:
     if not _insert_nulls:
         return
-    for _ in range(_stealth_rng.randint(1, 2)):
+    count = _stealth_rng.randint(1, 2)
+    try:
+        from src import humanization_report
+        humanization_report.report_insert_nulls(count)
+    except Exception:
+        pass
+    for _ in range(count):
         inp = INPUT()
         inp.type = INPUT_MOUSE
         inp.union.mi.dx = 0

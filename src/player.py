@@ -7,6 +7,7 @@ import math
 import time
 
 from src import config
+from src import humanization_report
 from src import input_backend
 from src import utils
 
@@ -134,10 +135,18 @@ class Player:
             delay = t - last_t
             if delay > 0:
                 if self._randomize and self._engine:
-                    delay += self._engine.delay_jitter_ms() / 1000.0
-                    delay *= self._engine.drift_factor()
+                    jitter_ms = self._engine.delay_jitter_ms()
+                    delay += jitter_ms / 1000.0
+                    humanization_report.report_delay_jitter_ms(jitter_ms)
+                    drift = self._engine.drift_factor()
+                    delay *= drift
+                    humanization_report.report_drift_factor(drift)
+                    humanization_report.report_variable_key_hold_ms(None)
                 elif self._randomize:
-                    delay += utils.randomize_time_ms() / 1000.0
+                    jitter_ms = utils.randomize_time_ms()
+                    delay += jitter_ms / 1000.0
+                    humanization_report.report_delay_jitter_ms(jitter_ms)
+                    humanization_report.report_variable_key_hold_ms(None)
                 delay /= self._speed
                 end_sleep = time.perf_counter() + delay
                 while time.perf_counter() < end_sleep:
@@ -150,6 +159,7 @@ class Player:
                     time.sleep(0.001)
                 if self._randomize and self._engine and self._engine.should_micro_pause():
                     pause_ms = self._engine.micro_pause_ms() / 1000.0 / self._speed
+                    humanization_report.report_micro_pause_ms(self._engine.micro_pause_ms())
                     time.sleep(max(0, pause_ms))
             last_t = t
             self._dispatch(ev)

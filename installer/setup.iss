@@ -13,6 +13,7 @@ AppPublisher={#MyAppPublisher}
 ; DefaultDirName: use {autopf}\SystemUtilities for generic folder name
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
+; OutputDir relative to this .iss -> installer\Output\ReRe_Setup_v1.0.exe
 OutputDir=Output
 OutputBaseFilename=ReRe_Setup_v1.0
 Compression=lzma2

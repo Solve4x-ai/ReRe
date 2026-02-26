@@ -349,9 +349,28 @@ class AppGui:
         self._build_settings_tab(tabview.tab("Settings"))
 
     def _build_quick_actions_tab(self, parent: ctk.CTkFrame) -> None:
+        # Top row: global options (always visible without expanding window)
+        shared = ctk.CTkFrame(parent, fg_color="transparent")
+        shared.pack(fill="x", padx=10, pady=(10, 6))
+        self._quick_randomize = ctk.CTkCheckBox(shared, text="Global randomization (micro-jitter)")
+        self._quick_randomize.pack(side="left", padx=(0, 20))
+        ctk.CTkLabel(shared, text="Macro playback speed (0.5×–3×):", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 6))
+        self._quick_speed = ctk.CTkSlider(shared, from_=0.5, to=3.0, number_of_steps=25, width=140)
+        self._quick_speed.set(1.0)
+        self._quick_speed.pack(side="left", padx=6)
+        self._quick_speed_label = ctk.CTkLabel(shared, text="1.0×", font=ctk.CTkFont(size=12, weight="bold"), width=36)
+        self._quick_speed_label.pack(side="left", padx=(0, 16))
+
+        def on_speed_changed(v: float) -> None:
+            if getattr(self, "_quick_speed_label", None):
+                self._quick_speed_label.configure(text=f"{v:.1f}×")
+
+        self._quick_speed.configure(command=on_speed_changed)
+        on_speed_changed(1.0)
+
         # Two panels side by side
         panes = ctk.CTkFrame(parent, fg_color="transparent")
-        panes.pack(fill="both", expand=True, padx=10, pady=10)
+        panes.pack(fill="both", expand=True, padx=10, pady=6)
 
         # Key Press Spammer
         key_frame = ctk.CTkFrame(panes, fg_color=COLOR_CARD, corner_radius=8, border_width=1, border_color="#333")
@@ -449,15 +468,61 @@ class AppGui:
         self._quick_mouse_stop_btn = mouse_stop
         self._quick_mouse_interval_display_var = mouse_interval_display_var
 
-        # Shared: randomization, speed, at bottom of tab
-        shared = ctk.CTkFrame(parent, fg_color="transparent")
-        shared.pack(fill="x", padx=10, pady=10)
-        self._quick_randomize = ctk.CTkCheckBox(shared, text="Global randomization (micro-jitter)")
-        self._quick_randomize.pack(side="left", padx=(0, 20))
-        ctk.CTkLabel(shared, text="Playback speed:").pack(side="left", padx=(0, 6))
-        self._quick_speed = ctk.CTkSlider(shared, from_=0.5, to=3.0, number_of_steps=25, width=120)
-        self._quick_speed.set(1.0)
-        self._quick_speed.pack(side="left", padx=6)
+        # Humanization: last-applied values (real-time proof)
+        human_frame = ctk.CTkFrame(parent, fg_color=COLOR_CARD, corner_radius=8, border_width=1, border_color="#333")
+        human_frame.pack(fill="x", padx=10, pady=(8, 10))
+        ctk.CTkLabel(human_frame, text="Humanization (last applied)", font=ctk.CTkFont(weight="bold", size=12)).pack(anchor="w", padx=12, pady=(10, 6))
+        self._human_labels: dict[str, ctk.CTkLabel] = {}
+        for key, label_text in [
+            ("delay_jitter", "Gaussian delay jitter:"),
+            ("key_hold", "Variable key hold:"),
+            ("drift", "Session drift (±%):"),
+            ("micro_pause", "Micro-pauses:"),
+            ("insert_nulls", "Insert nulls:"),
+            ("qpc", "Use QPC time:"),
+        ]:
+            row = ctk.CTkFrame(human_frame, fg_color="transparent")
+            row.pack(fill="x", padx=12, pady=2)
+            ctk.CTkLabel(row, text=label_text, font=ctk.CTkFont(size=11), width=160, anchor="w").pack(side="left")
+            lbl = ctk.CTkLabel(row, text="—", font=ctk.CTkFont(size=11), text_color=COLOR_ACCENT)
+            lbl.pack(side="left")
+            self._human_labels[key] = lbl
+        self._poll_humanization_report()
+
+    def _poll_humanization_report(self) -> None:
+        try:
+            from src import humanization_report
+            r = humanization_report.get_report()
+        except Exception:
+            r = {}
+        def fmt(v: object) -> str:
+            if v is None:
+                return "—"
+            if isinstance(v, bool):
+                return "yes" if v else "no"
+            if isinstance(v, (int, float)):
+                if isinstance(v, float) and abs(v) < 1e-6 and v != 0:
+                    return f"{v:+.2f}"
+                return str(v)
+            return str(v)
+        if getattr(self, "_human_labels", None):
+            jitter = r.get("delay_jitter_ms")
+            self._human_labels["delay_jitter"].configure(text=f"{jitter:+.2f} ms" if jitter is not None else "—")
+            key_hold = r.get("variable_key_hold_ms")
+            self._human_labels["key_hold"].configure(text=f"{fmt(key_hold)} ms" if key_hold is not None else "—")
+            drift = r.get("drift_factor")
+            if drift is not None:
+                pct = (drift - 1.0) * 100
+                self._human_labels["drift"].configure(text=f"{pct:+.2f}% (×{drift:.3f})")
+            else:
+                self._human_labels["drift"].configure(text="—")
+            mp = r.get("micro_pause_ms")
+            self._human_labels["micro_pause"].configure(text=f"{mp:.0f} ms" if mp is not None else "—")
+            nulls = r.get("insert_nulls_count")
+            self._human_labels["insert_nulls"].configure(text=str(nulls) if nulls is not None else "—")
+            qpc = r.get("qpc_used")
+            self._human_labels["qpc"].configure(text="yes" if qpc else "no" if qpc is False else "—")
+        self._root.after(350, self._poll_humanization_report)
 
     def _parse_interval(self, slider: ctk.CTkSlider, entry: ctk.CTkEntry, lo: int, hi: int, default: int) -> int:
         try:
@@ -954,7 +1019,7 @@ class AppGui:
         bar = ctk.CTkFrame(self._root, fg_color=COLOR_CARD, corner_radius=6, height=36)
         bar.pack(fill="x", padx=10, pady=(6, 10))
         bar.pack_propagate(False)
-        self._status_var = ctk.StringVar(value="Idle – Ready")
+        self._status_var = ctk.StringVar(value="")
         ctk.CTkLabel(bar, textvariable=self._status_var).pack(side="left", padx=12, pady=8)
         self._progress_var = ctk.DoubleVar(value=0.0)
         self._progress_bar = ctk.CTkProgressBar(bar, variable=self._progress_var, width=200)
