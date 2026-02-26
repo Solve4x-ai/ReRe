@@ -1,17 +1,17 @@
 @echo off
 cd /d "%~dp0"
+set "PROJECT_ROOT=%CD%"
 echo Installing dependencies...
 pip install -r requirements.txt
+if errorlevel 1 (echo pip install failed. & pause & exit /b 1)
 
-set KEY=%RANDOM%%RANDOM%%RANDOM%%RANDOM%
-
-echo Building Python application...
+echo.
+echo Building Python application (PyInstaller)...
 python -m PyInstaller --onedir ^
             --noconsole ^
             --uac-admin ^
             --name "ReRe" ^
             --distpath "dist" ^
-            --key=%KEY% ^
             --add-data "macros;macros" ^
             --add-data "assets;assets" ^
             --hidden-import=src ^
@@ -27,16 +27,35 @@ python -m PyInstaller --onedir ^
             --hidden-import=PIL.Image ^
             --hidden-import=PIL.ImageTk ^
             src/main.py
+if errorlevel 1 (echo PyInstaller failed. & pause & exit /b 1)
 
-REM Optional: UPX compress (if UPX in PATH) - uncomment next line
-REM for %%f in (dist\%EXENAME%\*.pyd dist\%EXENAME%\_internal\*.pyd) do upx --best "%%f" 2>nul
+echo.
+if not exist "dist\ReRe\ReRe.exe" (
+    echo ERROR: PyInstaller did not produce dist\ReRe\ReRe.exe
+    pause
+    exit /b 1
+)
+echo [OK] Application built: %PROJECT_ROOT%\dist\ReRe\ReRe.exe
+echo      (Full folder: %PROJECT_ROOT%\dist\ReRe\)
 
-REM Optional: Nuitka standalone (uncomment to try)
-REM nuitka --standalone --onefile --enable-plugin=tk-inter --output-filename=%EXENAME%.exe src/main.py
+echo.
+echo Building professional installer (Inno Setup)...
+if not exist "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" (
+    echo WARNING: Inno Setup 6 not found at default path.
+    echo Skipping installer. Run the app from: dist\ReRe\ReRe.exe
+    echo.
+    goto :summary
+)
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\setup.iss"
+if errorlevel 1 (
+    echo Inno Setup failed. Run the app from: dist\ReRe\ReRe.exe
+    goto :summary
+)
 
-echo Building professional installer...
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\setup.iss
-
+:summary
 echo ========================================
-echo Build complete! Installer ready in installer\Output\
+echo OUTPUT LOCATIONS:
+echo   App (run without installer): %PROJECT_ROOT%\dist\ReRe\ReRe.exe
+echo   Installer (if built):       %PROJECT_ROOT%\installer\Output\ReRe_Setup_v1.0.exe
+echo ========================================
 pause
