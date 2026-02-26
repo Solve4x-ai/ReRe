@@ -71,8 +71,8 @@ COLOR_ACCENT = "#00FF9D"
 COLOR_DANGER = "#FF2D55"
 COLOR_CARD = ("#E8E8E8", "#2A2A2A")  # light mode, dark mode
 COLOR_BORDER = ("#ccc", "#333")
-MIN_WIDTH = 900
-MIN_HEIGHT = 620
+MIN_WIDTH = 920
+MIN_HEIGHT = 780
 INTERVAL_MAX_MS = 600_000  # 10 minutes
 
 
@@ -172,6 +172,21 @@ class AppGui:
             config.set_macros_dir(override)
         else:
             config.set_macros_dir(None)
+
+    def _restrict_entry_to_digits(self, entry: ctk.CTkEntry) -> None:
+        """Allow only digits in entry; strip any other characters on key release."""
+
+        def on_key(_event) -> None:
+            try:
+                s = entry.get()
+                digits = "".join(c for c in s if c.isdigit())
+                if digits != s:
+                    entry.delete(0, "end")
+                    entry.insert(0, digits)
+            except Exception:
+                pass
+
+        entry.bind("<KeyRelease>", on_key)
 
     def _center_window(self) -> None:
         self._root.update_idletasks()
@@ -390,6 +405,7 @@ class AppGui:
         key_interval_entry = ctk.CTkEntry(key_frame, width=80, placeholder_text="200")
         key_interval_entry.insert(0, "200")
         key_interval_entry.pack(anchor="w", padx=12, pady=2)
+        self._restrict_entry_to_digits(key_interval_entry)
         key_interval = ctk.CTkSlider(key_frame, from_=50, to=INTERVAL_MAX_MS, number_of_steps=599, width=200,
                                       command=lambda v: (key_interval_entry.delete(0, "end"), key_interval_entry.insert(0, str(int(v)))))
         key_interval.set(200)
@@ -402,25 +418,24 @@ class AppGui:
         key_count_entry = ctk.CTkEntry(key_frame, width=80, placeholder_text="100")
         key_count_entry.insert(0, "100")
         key_count_entry.pack(anchor="w", padx=12, pady=2)
+        self._restrict_entry_to_digits(key_count_entry)
 
         key_interval_display_var = ctk.StringVar(value="Last interval: — ms")
         key_interval_display = ctk.CTkLabel(key_frame, textvariable=key_interval_display_var, font=ctk.CTkFont(size=13, weight="bold"), text_color="#00FF9D")
         key_interval_display.pack(anchor="w", padx=12, pady=(4, 0))
-        key_start = ctk.CTkButton(key_frame, text="Start Spamming", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000",
-                                   command=lambda: self._start_key_spammer(key_combo, tap_hold, key_interval, key_interval_entry, key_count_infinite, key_count_entry, key_start, key_stop, key_interval_display_var))
-        key_start.pack(pady=12, padx=12, fill="x")
-        key_stop = ctk.CTkButton(key_frame, text="Stop", fg_color=COLOR_DANGER, hover_color="#CC2244",
-                                 command=lambda: self._stop_key_spammer(key_start, key_stop, key_interval_display_var))
-        key_stop.pack(pady=(0, 12), padx=12, fill="x")
-        key_stop.configure(state="disabled")
+        key_toggle_btn = ctk.CTkButton(
+            key_frame, text="Start Spamming", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000",
+            command=self._toggle_key_spammer
+        )
+        key_toggle_btn.pack(pady=12, padx=12, fill="x")
+        key_toggle_btn.configure(cursor="hand2")
         self._quick_key_combo = key_combo
         self._quick_tap_hold = tap_hold
         self._quick_key_interval_slider = key_interval
         self._quick_key_interval_entry = key_interval_entry
         self._quick_key_count_infinite = key_count_infinite
         self._quick_key_count_entry = key_count_entry
-        self._quick_key_start_btn = key_start
-        self._quick_key_stop_btn = key_stop
+        self._quick_key_toggle_btn = key_toggle_btn
         self._quick_key_interval_display_var = key_interval_display_var
 
         # Mouse Auto-Clicker
@@ -432,10 +447,15 @@ class AppGui:
         mouse_btn.pack(anchor="w", padx=12, pady=4)
         mouse_btn.set("Left Click")
 
+        mouse_single_repeat = ctk.CTkSegmentedButton(mouse_frame, values=["Single click", "Repeat"])
+        mouse_single_repeat.pack(anchor="w", padx=12, pady=4)
+        mouse_single_repeat.set("Single click")
+
         ctk.CTkLabel(mouse_frame, text="Interval (ms): 50 – 600000 (10 min)").pack(anchor="w", padx=12, pady=(8, 0))
         mouse_interval_entry = ctk.CTkEntry(mouse_frame, width=80, placeholder_text="200")
         mouse_interval_entry.insert(0, "200")
         mouse_interval_entry.pack(anchor="w", padx=12, pady=2)
+        self._restrict_entry_to_digits(mouse_interval_entry)
         mouse_interval = ctk.CTkSlider(mouse_frame, from_=50, to=INTERVAL_MAX_MS, number_of_steps=599, width=200,
                                        command=lambda v: (mouse_interval_entry.delete(0, "end"), mouse_interval_entry.insert(0, str(int(v)))))
         mouse_interval.set(200)
@@ -448,24 +468,24 @@ class AppGui:
         mouse_count_entry = ctk.CTkEntry(mouse_frame, width=80, placeholder_text="100")
         mouse_count_entry.insert(0, "100")
         mouse_count_entry.pack(anchor="w", padx=12, pady=2)
+        self._restrict_entry_to_digits(mouse_count_entry)
 
         mouse_interval_display_var = ctk.StringVar(value="Last interval: — ms")
         mouse_interval_display = ctk.CTkLabel(mouse_frame, textvariable=mouse_interval_display_var, font=ctk.CTkFont(size=13, weight="bold"), text_color="#00FF9D")
         mouse_interval_display.pack(anchor="w", padx=12, pady=(4, 0))
-        mouse_start = ctk.CTkButton(mouse_frame, text="Start Clicking", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000",
-                                   command=lambda: self._start_mouse_clicker(mouse_btn, mouse_interval, mouse_interval_entry, mouse_count_infinite, mouse_count_entry, mouse_start, mouse_stop, mouse_interval_display_var))
-        mouse_start.pack(pady=12, padx=12, fill="x")
-        mouse_stop = ctk.CTkButton(mouse_frame, text="Stop", fg_color=COLOR_DANGER, hover_color="#CC2244",
-                                   command=lambda: self._stop_mouse_clicker(mouse_start, mouse_stop, mouse_interval_display_var))
-        mouse_stop.pack(pady=(0, 12), padx=12, fill="x")
-        mouse_stop.configure(state="disabled")
+        mouse_toggle_btn = ctk.CTkButton(
+            mouse_frame, text="Start Clicking", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000",
+            command=self._toggle_mouse_clicker
+        )
+        mouse_toggle_btn.pack(pady=12, padx=12, fill="x")
+        mouse_toggle_btn.configure(cursor="hand2")
         self._quick_mouse_btn = mouse_btn
+        self._quick_mouse_single_repeat = mouse_single_repeat
         self._quick_mouse_interval_slider = mouse_interval
         self._quick_mouse_interval_entry = mouse_interval_entry
         self._quick_mouse_count_infinite = mouse_count_infinite
         self._quick_mouse_count_entry = mouse_count_entry
-        self._quick_mouse_start_btn = mouse_start
-        self._quick_mouse_stop_btn = mouse_stop
+        self._quick_mouse_toggle_btn = mouse_toggle_btn
         self._quick_mouse_interval_display_var = mouse_interval_display_var
 
         # Humanization: last-applied values (real-time proof)
@@ -539,100 +559,125 @@ class AppGui:
         except ValueError:
             return 100
 
-    def _start_key_spammer(self, combo, tap_hold, slider, entry, infinite_cb, count_entry, start_btn, stop_btn, interval_display_var: ctk.StringVar | None = None) -> None:
-        key = combo.get()
-        tap = tap_hold.get() == "Tap"
-        interval = self._parse_interval(slider, entry, config.KEY_SPAM_INTERVAL_MS_MIN, config.KEY_SPAM_INTERVAL_MS_MAX, 200)
-        count = self._parse_count(infinite_cb, count_entry)
-        entry.delete(0, "end")
-        entry.insert(0, str(interval))
-        if interval_display_var:
-            interval_display_var.set("Last interval: — ms")
+    def _toggle_key_spammer(self) -> None:
+        if self._controller.is_key_spammer_running():
+            self._stop_key_spammer()
+        else:
+            self._start_key_spammer()
+
+    def _start_key_spammer(self) -> None:
+        key = self._quick_key_combo.get()
+        tap = self._quick_tap_hold.get() == "Tap"
+        interval = self._parse_interval(
+            self._quick_key_interval_slider, self._quick_key_interval_entry,
+            config.KEY_SPAM_INTERVAL_MS_MIN, config.KEY_SPAM_INTERVAL_MS_MAX, 200
+        )
+        count = self._parse_count(self._quick_key_count_infinite, self._quick_key_count_entry)
+        self._quick_key_interval_entry.delete(0, "end")
+        self._quick_key_interval_entry.insert(0, str(interval))
+        if self._quick_key_interval_display_var:
+            self._quick_key_interval_display_var.set("Last interval: — ms")
         self._controller.start_key_spammer(key, tap, interval, count, self._quick_randomize.get())
-        start_btn.configure(state="disabled")
-        stop_btn.configure(state="normal")
+        btn = self._quick_key_toggle_btn
+        btn.configure(text="Stop Spamming", fg_color=COLOR_DANGER, hover_color="#CC2244", text_color="white")
         self._root.after(0, self._update_state_badge)
-        if interval_display_var:
-            self._poll_key_interval_display(interval_display_var)
+        if self._quick_key_interval_display_var:
+            self._poll_key_interval_display(self._quick_key_interval_display_var)
 
     def _poll_key_interval_display(self, var: ctk.StringVar) -> None:
         if not self._controller.is_key_spammer_running():
+            self._root.after(0, self._refresh_key_spammer_ui)
             return
         last = self._controller.get_last_key_interval_ms()
         if last is not None:
             var.set(f"Last interval: {int(round(last))} ms")
         self._root.after(200, lambda: self._poll_key_interval_display(var))
 
+    def _refresh_key_spammer_ui(self) -> None:
+        if not self._controller.is_key_spammer_running() and getattr(self, "_quick_key_toggle_btn", None):
+            btn = self._quick_key_toggle_btn
+            btn.configure(text="Start Spamming", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000")
+            if getattr(self, "_quick_key_interval_display_var", None):
+                self._quick_key_interval_display_var.set("Last interval: — ms")
+            self._update_state_badge()
+
+    def _stop_key_spammer(self) -> None:
+        self._controller.stop_key_spammer()
+        if getattr(self, "_quick_key_toggle_btn", None):
+            self._quick_key_toggle_btn.configure(text="Start Spamming", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000")
+        if getattr(self, "_quick_key_interval_display_var", None):
+            self._quick_key_interval_display_var.set("Last interval: — ms")
+        self._root.after(0, self._update_state_badge)
+
+    def _toggle_mouse_clicker(self) -> None:
+        if self._controller.is_mouse_clicker_running():
+            self._stop_mouse_clicker()
+        else:
+            self._start_mouse_clicker()
+
     def _poll_mouse_interval_display(self, var: ctk.StringVar) -> None:
         if not self._controller.is_mouse_clicker_running():
+            self._root.after(0, self._refresh_mouse_clicker_ui)
             return
         last = self._controller.get_last_mouse_interval_ms()
         if last is not None:
             var.set(f"Last interval: {int(round(last))} ms")
         self._root.after(200, lambda: self._poll_mouse_interval_display(var))
 
-    def _stop_key_spammer(self, start_btn, stop_btn, interval_display_var: ctk.StringVar | None = None) -> None:
-        self._controller.stop_key_spammer()
-        start_btn.configure(state="normal")
-        stop_btn.configure(state="disabled")
-        if interval_display_var:
-            interval_display_var.set("Last interval: — ms")
-        self._root.after(0, self._update_state_badge)
+    def _refresh_mouse_clicker_ui(self) -> None:
+        if not self._controller.is_mouse_clicker_running() and getattr(self, "_quick_mouse_toggle_btn", None):
+            btn = self._quick_mouse_toggle_btn
+            btn.configure(text="Start Clicking", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000")
+            if getattr(self, "_quick_mouse_interval_display_var", None):
+                self._quick_mouse_interval_display_var.set("Last interval: — ms")
+            self._update_state_badge()
 
-    def _start_mouse_clicker(self, btn, slider, entry, infinite_cb, count_entry, start_btn, stop_btn, interval_display_var: ctk.StringVar | None = None) -> None:
-        left = btn.get() == "Left Click"
-        interval = self._parse_interval(slider, entry, config.MOUSE_CLICK_INTERVAL_MS_MIN, config.MOUSE_CLICK_INTERVAL_MS_MAX, 200)
-        count = self._parse_count(infinite_cb, count_entry)
-        entry.delete(0, "end")
-        entry.insert(0, str(interval))
-        if interval_display_var:
-            interval_display_var.set("Last interval: — ms")
-        self._controller.start_mouse_clicker(left, interval, count, self._quick_randomize.get())
-        start_btn.configure(state="disabled")
-        stop_btn.configure(state="normal")
+    def _start_mouse_clicker(self) -> None:
+        left = self._quick_mouse_btn.get() == "Left Click"
+        single_click = self._quick_mouse_single_repeat.get() == "Single click"
+        interval = self._parse_interval(
+            self._quick_mouse_interval_slider, self._quick_mouse_interval_entry,
+            config.MOUSE_CLICK_INTERVAL_MS_MIN, config.MOUSE_CLICK_INTERVAL_MS_MAX, 200
+        )
+        count = self._parse_count(self._quick_mouse_count_infinite, self._quick_mouse_count_entry)
+        self._quick_mouse_interval_entry.delete(0, "end")
+        self._quick_mouse_interval_entry.insert(0, str(interval))
+        if self._quick_mouse_interval_display_var:
+            self._quick_mouse_interval_display_var.set("Last interval: — ms")
+        self._controller.start_mouse_clicker(left, interval, count, self._quick_randomize.get(), single_click=single_click)
+        btn = self._quick_mouse_toggle_btn
+        btn.configure(text="Stop Clicking", fg_color=COLOR_DANGER, hover_color="#CC2244", text_color="white")
         self._root.after(0, self._update_state_badge)
-        if interval_display_var:
-            self._poll_mouse_interval_display(interval_display_var)
+        if self._quick_mouse_interval_display_var:
+            self._poll_mouse_interval_display(self._quick_mouse_interval_display_var)
 
-    def _stop_mouse_clicker(self, start_btn, stop_btn, interval_display_var: ctk.StringVar | None = None) -> None:
+    def _stop_mouse_clicker(self) -> None:
         self._controller.stop_mouse_clicker()
-        start_btn.configure(state="normal")
-        stop_btn.configure(state="disabled")
-        if interval_display_var:
-            interval_display_var.set("Last interval: — ms")
+        if getattr(self, "_quick_mouse_toggle_btn", None):
+            self._quick_mouse_toggle_btn.configure(text="Start Clicking", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000")
+        if getattr(self, "_quick_mouse_interval_display_var", None):
+            self._quick_mouse_interval_display_var.set("Last interval: — ms")
         self._root.after(0, self._update_state_badge)
 
     def trigger_key_spammer_start(self) -> None:
         if self._controller.is_key_spammer_running():
             return
-        self._root.after(0, lambda: self._start_key_spammer(
-            self._quick_key_combo, self._quick_tap_hold, self._quick_key_interval_slider,
-            self._quick_key_interval_entry, self._quick_key_count_infinite, self._quick_key_count_entry,
-            self._quick_key_start_btn, self._quick_key_stop_btn, self._quick_key_interval_display_var,
-        ))
+        self._root.after(0, self._start_key_spammer)
 
     def trigger_key_spammer_stop(self) -> None:
         if not self._controller.is_key_spammer_running():
             return
-        self._root.after(0, lambda: self._stop_key_spammer(
-            self._quick_key_start_btn, self._quick_key_stop_btn, self._quick_key_interval_display_var,
-        ))
+        self._root.after(0, self._stop_key_spammer)
 
     def trigger_mouse_clicker_start(self) -> None:
         if self._controller.is_mouse_clicker_running():
             return
-        self._root.after(0, lambda: self._start_mouse_clicker(
-            self._quick_mouse_btn, self._quick_mouse_interval_slider, self._quick_mouse_interval_entry,
-            self._quick_mouse_count_infinite, self._quick_mouse_count_entry,
-            self._quick_mouse_start_btn, self._quick_mouse_stop_btn, self._quick_mouse_interval_display_var,
-        ))
+        self._root.after(0, self._start_mouse_clicker)
 
     def trigger_mouse_clicker_stop(self) -> None:
         if not self._controller.is_mouse_clicker_running():
             return
-        self._root.after(0, lambda: self._stop_mouse_clicker(
-            self._quick_mouse_start_btn, self._quick_mouse_stop_btn, self._quick_mouse_interval_display_var,
-        ))
+        self._root.after(0, self._stop_mouse_clicker)
 
     def set_on_settings_saved(self, callback: callable) -> None:
         self._on_settings_saved = callback or (lambda: None)
@@ -827,17 +872,21 @@ class AppGui:
         rmin = ctk.CTkEntry(s, width=80, placeholder_text="5")
         rmin.insert(0, str(self._settings.get("randomize_time_ms_min", 5)))
         rmin.pack(anchor="w", pady=2)
+        self._restrict_entry_to_digits(rmin)
         rmax = ctk.CTkEntry(s, width=80, placeholder_text="15")
         rmax.insert(0, str(self._settings.get("randomize_time_ms_max", 15)))
         rmax.pack(anchor="w", pady=(0, 12))
+        self._restrict_entry_to_digits(rmax)
 
         ctk.CTkLabel(s, text="Randomization (mouse noise px)", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(8, 4))
         pxmin = ctk.CTkEntry(s, width=80)
         pxmin.insert(0, str(self._settings.get("randomize_mouse_px_min", 1)))
         pxmin.pack(anchor="w", pady=2)
+        self._restrict_entry_to_digits(pxmin)
         pxmax = ctk.CTkEntry(s, width=80)
         pxmax.insert(0, str(self._settings.get("randomize_mouse_px_max", 4)))
         pxmax.pack(anchor="w", pady=(0, 12))
+        self._restrict_entry_to_digits(pxmax)
 
         ctk.CTkLabel(s, text="Start recording hotkey", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(8, 4))
         start_rec_row = ctk.CTkFrame(s, fg_color="transparent")

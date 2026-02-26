@@ -175,6 +175,7 @@ class PlaybackController:
         randomize: bool,
     ) -> None:
         if tap_not_hold:
+            # Tap = repeated key press (down+up) at interval, for count or until stop
             n = 0
             while not self._key_spam_stop.is_set():
                 if count is not None and n >= count:
@@ -190,6 +191,7 @@ class PlaybackController:
                 while time.perf_counter() < end and not self._key_spam_stop.is_set():
                     time.sleep(0.001)
         else:
+            # Hold = key down until stop, then key up
             input_backend.key_down(sc)
             try:
                 while not self._key_spam_stop.is_set():
@@ -218,13 +220,14 @@ class PlaybackController:
         interval_ms: int,
         count: int | None,
         randomize: bool = False,
+        single_click: bool = False,
     ) -> None:
         self._mouse_clicker_stop.clear()
         down = _LEFT_DOWN if left_not_right else _RIGHT_DOWN
         up = _LEFT_UP if left_not_right else _RIGHT_UP
         self._mouse_clicker_thread = threading.Thread(
             target=self._run_mouse_clicker,
-            args=(down, up, interval_ms, count, randomize),
+            args=(down, up, interval_ms, count, randomize, single_click),
             daemon=True,
         )
         self._mouse_clicker_thread.start()
@@ -236,7 +239,14 @@ class PlaybackController:
         interval_ms: int,
         count: int | None,
         randomize: bool,
+        single_click: bool,
     ) -> None:
+        if single_click:
+            # Single click = one down + up, then stop
+            input_backend.mouse_button_down(down_flag)
+            input_backend.mouse_button_up(up_flag)
+            self._mouse_clicker_thread = None
+            return
         n = 0
         while not self._mouse_clicker_stop.is_set():
             if count is not None and n >= count:
