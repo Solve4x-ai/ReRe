@@ -175,7 +175,9 @@ class PlaybackController:
         randomize: bool,
     ) -> None:
         if tap_not_hold:
-            # Tap = repeated key press (down+up) at interval, for count or until stop
+            # Tap = repeated key press (down+up) at interval after each execution,
+            # for count or until stop. Timing is based on when the key is actually
+            # pressed (matches game respawn that keys off collection time).
             n = 0
             while not self._key_spam_stop.is_set():
                 if count is not None and n >= count:
@@ -183,8 +185,11 @@ class PlaybackController:
                 input_backend.key_down(sc)
                 input_backend.key_up(sc)
                 n += 1
-                jitter = utils.randomize_time_ms() if randomize else 0
-                actual_ms = interval_ms + jitter
+                jitter_ms = utils.randomize_time_ms() if randomize else 0.0
+                # Never reduce below the base interval
+                if jitter_ms < 0.0:
+                    jitter_ms = 0.0
+                actual_ms = interval_ms + jitter_ms
                 self._last_key_interval_ms = actual_ms
                 delay_sec = max(0.001, actual_ms / 1000.0)
                 end = time.perf_counter() + delay_sec
@@ -254,8 +259,10 @@ class PlaybackController:
             input_backend.mouse_button_down(down_flag)
             input_backend.mouse_button_up(up_flag)
             n += 1
-            jitter = utils.randomize_time_ms() if randomize else 0
-            actual_ms = interval_ms + jitter
+            jitter_ms = utils.randomize_time_ms() if randomize else 0.0
+            if jitter_ms < 0.0:
+                jitter_ms = 0.0
+            actual_ms = interval_ms + jitter_ms
             self._last_mouse_interval_ms = actual_ms
             delay_sec = max(0.001, actual_ms / 1000.0)
             end = time.perf_counter() + delay_sec
