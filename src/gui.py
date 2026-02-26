@@ -26,6 +26,12 @@ SWP_NOSIZE = 0x0002
 SWP_FRAMECHANGED = 0x0020
 SWP_NOZORDER = 0x0004
 
+# Redraw constants for ghosting fix
+RDW_INVALIDATE = 0x0001
+RDW_UPDATENOW = 0x0100
+RDW_ALLCHILDREN = 0x0080
+RDW_ERASE = 0x0004
+
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
 user32.GetWindowLongW.restype = wintypes.LONG
@@ -37,6 +43,10 @@ user32.SetWindowPos.argtypes = [
     wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT,
 ]
 user32.SetWindowPos.restype = wintypes.BOOL
+user32.InvalidateRect.argtypes = [wintypes.HWND, ctypes.c_void_p, wintypes.BOOL]
+user32.InvalidateRect.restype = wintypes.BOOL
+user32.RedrawWindow.argtypes = [wintypes.HWND, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulong]
+user32.RedrawWindow.restype = wintypes.BOOL
 
 
 def get_hwnd(root: ctk.CTk) -> wintypes.HWND:
@@ -74,8 +84,12 @@ class AppGui:
         self._playback_progress_job: str | None = None
         self._overlay_toggle_btn: ctk.CTkButton | None = None
         self._overlay_status_label: ctk.CTkLabel | None = None
-        self._is_click_through = True
+        self._is_click_through = False
         self._overlay_enforced = False
+        self._overlay_opacity = float(self._settings.get("overlay_opacity", 1.0))
+        self._configure_after_id: str | None = None
+        self._overlay_transparency_slider: ctk.CTkSlider | None = None
+        self._overlay_click_through_cb: ctk.CTkCheckBox | None = None
 
         ctk.set_appearance_mode(self._settings.get("theme", "Dark"))
         ctk.set_default_color_theme("green")
@@ -93,26 +107,65 @@ class AppGui:
         self._update_state_badge()
         self._update_always_on_top()
         self._set_window_icon()
+        self._root.bind("<Configure>", self._on_configure)
         self._root.after(400, self._maybe_setup_overlay_mode)
 
+    def _on_configure(self, event) -> None:
+        """Force complete redraw on resize to eliminate ghosting with layered windows."""
+        if self._configure_after_id:
+            self._root.after_cancel(self._configure_after_id)
+        self._configure_after_id = self._root.after(10, self._force_full_redraw)
+
+    def _force_full_redraw(self) -> None:
+        """Full redraw of window and all children; re-apply overlay style after redraw."""
+        self._configure_after_id = None
+        try:
+            hwnd = get_hwnd(self._root)
+            user32.RedrawWindow(
+                hwnd, None, None,
+                RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN | RDW_ERASE,
+            )
+            self._root.update_idletasks()
+            self._root.update()
+            self._reapply_overlay_style()
+        except Exception:
+            pass
+
+    def _is_layered(self) -> bool:
+        try:
+            hwnd = get_hwnd(self._root)
+            style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            return bool(style & WS_EX_LAYERED)
+        except Exception:
+            return False
+
     def _maybe_setup_overlay_mode(self) -> None:
-        if self._settings.get("start_in_overlay_mode", True):
+        if self._settings.get("start_in_overlay_mode", False):
             self.setup_overlay_mode()
 
+    def _get_overlay_opacity(self) -> float:
+        if self._overlay_transparency_slider is not None:
+            return float(self._overlay_transparency_slider.get())
+        return self._overlay_opacity
+
+    def _get_overlay_click_through(self) -> bool:
+        if self._overlay_click_through_cb is not None:
+            return self._overlay_click_through_cb.get()
+        return self._is_click_through
+
     def _reapply_overlay_style(self) -> None:
-        """Re-apply current overlay extended style (e.g. after resize). Forces Windows to accept style with SWP_FRAMECHANGED."""
+        """Re-apply current click-through state after resize (topmost/layered already set)."""
         if not self._overlay_enforced:
             return
         try:
             hwnd = get_hwnd(self._root)
             style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            style |= WS_EX_TOPMOST | WS_EX_LAYERED
             if self._is_click_through:
                 style |= WS_EX_TRANSPARENT
             else:
                 style &= ~WS_EX_TRANSPARENT
             user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
-            user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
+            user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED)
         except Exception:
             pass
 
@@ -120,16 +173,29 @@ class AppGui:
         try:
             self._root.update_idletasks()
             hwnd = get_hwnd(self._root)
+            self._overlay_opacity = self._get_overlay_opacity()
+            self._is_click_through = self._get_overlay_click_through()
+
             style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            style |= WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT
+            style |= WS_EX_TOPMOST
+            if self._overlay_opacity < 1.0:
+                style |= WS_EX_LAYERED
+            if self._is_click_through:
+                style |= WS_EX_TRANSPARENT
+            else:
+                style &= ~WS_EX_TRANSPARENT
             user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
-            user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
-            user32.SetLayeredWindowAttributes(hwnd, 0, int(0.92 * 255), LWA_ALPHA)
-            self._is_click_through = True
+            user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED)
+
+            if self._overlay_opacity < 1.0:
+                user32.SetLayeredWindowAttributes(hwnd, 0, int(self._overlay_opacity * 255), LWA_ALPHA)
+
+            self._root.resizable(False, False)
             self._overlay_enforced = True
-            self._update_overlay_ui_text()
-            self._root.attributes("-alpha", 0.92)
             self._enforce_topmost()
+            self._update_overlay_ui_text()
+            self._root.attributes("-alpha", self._overlay_opacity)
+            self._force_full_redraw()
         except Exception:
             self._overlay_enforced = False
 
@@ -141,7 +207,7 @@ class AppGui:
             user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
         except Exception:
             pass
-        self._root.after(300, self._enforce_topmost)
+        self._root.after(100, self._enforce_topmost)
 
     def _overlay_hotkey_display(self) -> str:
         return (self._settings.get("overlay_toggle_hotkey") or "ctrl+alt+o").replace("+", "+").upper()
@@ -166,22 +232,61 @@ class AppGui:
                 )
 
     def toggle_click_through(self) -> None:
+        if not self._overlay_enforced:
+            return
         try:
             hwnd = get_hwnd(self._root)
             style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+
             if self._is_click_through:
                 style &= ~WS_EX_TRANSPARENT
-                self._root.attributes("-alpha", 1.0)
                 self._is_click_through = False
+                self._root.attributes("-alpha", 1.0)
+                self._root.resizable(True, True)
             else:
                 style |= WS_EX_TRANSPARENT
-                self._root.attributes("-alpha", 0.92)
                 self._is_click_through = True
+                self._root.attributes("-alpha", self._overlay_opacity)
+                self._root.resizable(False, False)
+
             user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
-            user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
+            user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED)
+
+            if self._overlay_click_through_cb is not None:
+                if self._is_click_through:
+                    self._overlay_click_through_cb.select()
+                else:
+                    self._overlay_click_through_cb.deselect()
             self._update_overlay_ui_text()
+            self._force_full_redraw()
         except Exception:
             pass
+
+    def _on_transparency_changed(self, value: float) -> None:
+        self._overlay_opacity = value
+        try:
+            self._root.attributes("-alpha", value)
+            hwnd = get_hwnd(self._root)
+            style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            insert_after = HWND_TOPMOST if self._overlay_enforced else 0
+            if value < 1.0:
+                style |= WS_EX_LAYERED
+                user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+                user32.SetWindowPos(hwnd, insert_after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED)
+                user32.SetLayeredWindowAttributes(hwnd, 0, int(value * 255), LWA_ALPHA)
+            else:
+                style &= ~WS_EX_LAYERED
+                user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+                user32.SetWindowPos(hwnd, insert_after, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED)
+            self._force_full_redraw()
+        except Exception:
+            pass
+
+    def _on_click_through_changed(self) -> None:
+        self._is_click_through = self._get_overlay_click_through()
+        if not self._overlay_enforced:
+            return
+        self._reapply_overlay_style()
 
     def _apply_macros_dir_override(self) -> None:
         override = self._settings.get("macros_dir_override", "").strip()
@@ -312,6 +417,10 @@ class AppGui:
         )
         self._overlay_toggle_btn.pack(side="right", padx=8, pady=10)
         self._overlay_toggle_btn.configure(cursor="hand2")
+        self._overlay_toggle_btn.bind(
+            "<Enter>",
+            lambda e: self._root.after(0, lambda: self.toggle_click_through() if self._is_click_through else None),
+        )
 
         stop_btn = ctk.CTkButton(
             toolbar, text="EMERGENCY STOP", fg_color=COLOR_DANGER, hover_color="#CC2244",
@@ -320,6 +429,31 @@ class AppGui:
         )
         stop_btn.pack(side="right", padx=12, pady=10)
         stop_btn.configure(cursor="hand2")
+
+        overlay_row = ctk.CTkFrame(self._root, fg_color="transparent")
+        overlay_row.pack(fill="x", padx=10, pady=(0, 4))
+        ctk.CTkLabel(overlay_row, text="Opacity:", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 6))
+        def on_opacity_slider(v: float) -> None:
+            self._update_opacity_label(v)
+            self._on_transparency_changed(v)
+
+        self._overlay_transparency_slider = ctk.CTkSlider(
+            overlay_row, from_=0.5, to=1.0, number_of_steps=10, width=120, command=on_opacity_slider
+        )
+        self._overlay_transparency_slider.set(self._settings.get("overlay_opacity", 1.0))
+        self._update_opacity_label(self._overlay_transparency_slider.get())
+        self._overlay_transparency_slider.pack(side="left", padx=(0, 8))
+        self._overlay_opacity_label = ctk.CTkLabel(overlay_row, text="100%", font=ctk.CTkFont(size=12), width=36)
+        self._overlay_opacity_label.pack(side="left", padx=(0, 16))
+        self._overlay_click_through_cb = ctk.CTkCheckBox(overlay_row, text="Click-through", command=self._on_click_through_changed)
+        self._overlay_click_through_cb.pack(side="left", padx=0)
+        if self._settings.get("overlay_click_through", False):
+            self._overlay_click_through_cb.select()
+        self._update_opacity_label(self._overlay_transparency_slider.get())
+
+    def _update_opacity_label(self, value: float) -> None:
+        if getattr(self, "_overlay_opacity_label", None):
+            self._overlay_opacity_label.configure(text=f"{int(round(value * 100))}%")
 
     def _build_tabs(self) -> None:
         tabview = ctk.CTkTabview(self._root, fg_color=COLOR_CARD, corner_radius=8)
@@ -805,11 +939,19 @@ class AppGui:
             always_top.select()
 
         ctk.CTkLabel(s, text="Overlay Mode (ACT-style)", font=ctk.CTkFont(weight="bold", size=14)).pack(anchor="w", pady=(16, 8))
-        start_overlay_cb = ctk.CTkCheckBox(s, text="Start in Overlay Mode (recommended for gaming)")
+        start_overlay_cb = ctk.CTkCheckBox(s, text="Start in Overlay Mode (gaming)")
         start_overlay_cb.pack(anchor="w", pady=4)
-        if self._settings.get("start_in_overlay_mode", True):
+        if self._settings.get("start_in_overlay_mode", False):
             start_overlay_cb.select()
-        ctk.CTkLabel(s, text="Overlay toggle hotkey (click-through ↔ interactive)", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(8, 4))
+        ctk.CTkLabel(s, text="Transparency (opacity) when overlay is on: 50–100%", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(8, 4))
+        settings_opacity_slider = ctk.CTkSlider(s, from_=0.5, to=1.0, number_of_steps=10, width=200)
+        settings_opacity_slider.set(self._settings.get("overlay_opacity", 1.0))
+        settings_opacity_slider.pack(anchor="w", pady=2)
+        overlay_click_through_cb_settings = ctk.CTkCheckBox(s, text="Click-through (mouse passes to game when overlay is on)")
+        overlay_click_through_cb_settings.pack(anchor="w", pady=6)
+        if self._settings.get("overlay_click_through", False):
+            overlay_click_through_cb_settings.select()
+        ctk.CTkLabel(s, text="Overlay toggle hotkey (toggle click-through when overlay is on)", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(8, 4))
         overlay_hotkey_row = ctk.CTkFrame(s, fg_color="transparent")
         overlay_hotkey_row.pack(anchor="w", pady=2)
         overlay_toggle_entry = ctk.CTkEntry(overlay_hotkey_row, width=180, placeholder_text="ctrl+alt+o")
@@ -914,6 +1056,8 @@ class AppGui:
                 self._settings["macros_dir_override"] = path_entry.get().strip()
                 self._settings["always_on_top"] = always_top.get()
                 self._settings["start_in_overlay_mode"] = start_overlay_cb.get()
+                self._settings["overlay_opacity"] = round(settings_opacity_slider.get(), 2)
+                self._settings["overlay_click_through"] = overlay_click_through_cb_settings.get()
                 self._settings["overlay_toggle_hotkey"] = overlay_toggle_entry.get().strip().lower() or "ctrl+alt+o"
                 self._settings["antidetect_profile"] = profile_combo.get().lower()
                 self._settings["advanced_humanization_enabled"] = adv_human.get()
@@ -930,6 +1074,11 @@ class AppGui:
             ctk.set_appearance_mode(self._settings["theme"])
             self._apply_macros_dir_override()
             self._update_always_on_top()
+            self._overlay_opacity = self._settings["overlay_opacity"]
+            self._is_click_through = self._settings["overlay_click_through"]
+            if self._overlay_enforced:
+                self._reapply_overlay_style()
+                self._on_transparency_changed(self._overlay_opacity)
             self._on_settings_saved()
             self._set_status("Settings saved. Hotkeys updated.")
 
