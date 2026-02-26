@@ -1,0 +1,5 @@
+pynput
+keyboard
+customtkinter
+Pillow
+pywin32
