@@ -43,12 +43,10 @@ def main() -> None:
     recording_hooks: tuple = (None, None)
     key_spammer_hooks: tuple = (None, None)
     mouse_clicker_hooks: tuple = (None, None)
-    overlay_hook = None
 
     def register_hotkeys() -> None:
-        nonlocal emergency_hook, recording_hooks, key_spammer_hooks, mouse_clicker_hooks, overlay_hook
+        nonlocal emergency_hook, recording_hooks, key_spammer_hooks, mouse_clicker_hooks
         utils.unregister_hotkey(emergency_hook)
-        utils.unregister_hotkey(overlay_hook)
         utils.unregister_recording_hotkeys(recording_hooks)
         utils.unregister_recording_hotkeys(key_spammer_hooks)
         utils.unregister_recording_hotkeys(mouse_clicker_hooks)
@@ -59,7 +57,10 @@ def main() -> None:
             config.get_use_qpc_time(),
             config.get_input_mix_ratio(),
         )
-        emergency_hook = utils.register_emergency_hotkey(controller.emergency_stop)
+        emergency_hook = utils.register_emergency_hotkey(
+            s.get("emergency_hotkey") or config.EMERGENCY_HOTKEY,
+            lambda: gui._root.after(0, gui._handle_emergency_stop),
+        )
         start_k = s.get("start_recording_hotkey", "f9")
         stop_k = s.get("stop_recording_hotkey", "f10")
         recording_hooks = utils.register_recording_hotkeys(
@@ -75,10 +76,6 @@ def main() -> None:
         mouse_clicker_hooks = utils.register_mouse_clicker_hotkeys(
             mc_start, mc_stop, gui.trigger_mouse_clicker_start, gui.trigger_mouse_clicker_stop
         )
-        overlay_key = s.get("overlay_toggle_hotkey", "ctrl+alt+o")
-        overlay_hook = utils.register_overlay_toggle_hotkey(
-            overlay_key, lambda: gui._root.after(0, gui._handle_overlay_toggle)
-        )
 
     register_hotkeys()
     gui.set_on_settings_saved(register_hotkeys)
@@ -86,7 +83,6 @@ def main() -> None:
         gui.run()
     finally:
         utils.unregister_hotkey(emergency_hook)
-        utils.unregister_hotkey(overlay_hook)
         utils.unregister_recording_hotkeys(recording_hooks)
         utils.unregister_recording_hotkeys(key_spammer_hooks)
         utils.unregister_recording_hotkeys(mouse_clicker_hooks)

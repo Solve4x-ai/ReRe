@@ -118,20 +118,12 @@ def get_humanization_engine() -> HumanizationEngine | None:
     return _global_engine
 
 
-def register_emergency_hotkey(callback: Callable[[], None]) -> object:
-    """Register global hotkey for emergency stop. Returns hook; call .unhook() to remove."""
+def register_emergency_hotkey(hotkey: str | None, callback: Callable[[], None]) -> object:
+    """Register global hotkey for emergency stop (exits app). Returns hook; call .unhook() to remove."""
+    key = (hotkey or config.EMERGENCY_HOTKEY).strip().lower()
     try:
         import keyboard as kb
-        return kb.add_hotkey(config.EMERGENCY_HOTKEY, callback)
-    except Exception:
-        return None
-
-
-def register_overlay_toggle_hotkey(hotkey: str, callback: Callable[[], None]) -> object:
-    """Register global hotkey for overlay toggle (click-through ↔ interactive). Returns hook."""
-    try:
-        import keyboard as kb
-        return kb.add_hotkey(hotkey, callback)
+        return kb.add_hotkey(key, callback)
     except Exception:
         return None
 

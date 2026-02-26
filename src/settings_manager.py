@@ -27,6 +27,7 @@ DEFAULTS = {
     "randomize_mouse_px_min": config.RANDOMIZE_MOUSE_PX_MIN,
     "randomize_mouse_px_max": config.RANDOMIZE_MOUSE_PX_MAX,
     "always_on_top": False,
+    "window_transparency": 0.0,
     "antidetect_profile": "safe",
     "advanced_humanization_enabled": True,
     "humanization_intensity": 0,
@@ -35,10 +36,6 @@ DEFAULTS = {
     "use_qpc_time": False,
     "obfuscate_process_name": False,
     "generic_window_title": "",
-    "start_in_overlay_mode": False,
-    "overlay_toggle_hotkey": "ctrl+alt+o",
-    "overlay_opacity": 1.0,
-    "overlay_click_through": False,
 }
 
 # Anti-detection profile presets (applied when profile changes to non-Custom)
