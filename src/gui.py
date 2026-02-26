@@ -23,6 +23,8 @@ LWA_ALPHA = 0x02
 HWND_TOPMOST = -1
 SWP_NOMOVE = 0x0001
 SWP_NOSIZE = 0x0002
+SWP_FRAMECHANGED = 0x0020
+SWP_NOZORDER = 0x0004
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
@@ -40,6 +42,8 @@ user32.SetWindowPos.restype = wintypes.BOOL
 def get_hwnd(root: ctk.CTk) -> wintypes.HWND:
     """Get HWND from tkinter/CTk root for Win32 overlay APIs."""
     return wintypes.HWND(root.winfo_id())
+
+
 from src.controllers.playback_controller import PlaybackController, State
 from src import macro_storage
 from src import settings_manager
@@ -95,20 +99,35 @@ class AppGui:
         if self._settings.get("start_in_overlay_mode", True):
             self.setup_overlay_mode()
 
+    def _reapply_overlay_style(self) -> None:
+        """Re-apply current overlay extended style (e.g. after resize). Forces Windows to accept style with SWP_FRAMECHANGED."""
+        if not self._overlay_enforced:
+            return
+        try:
+            hwnd = get_hwnd(self._root)
+            style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            style |= WS_EX_TOPMOST | WS_EX_LAYERED
+            if self._is_click_through:
+                style |= WS_EX_TRANSPARENT
+            else:
+                style &= ~WS_EX_TRANSPARENT
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+            user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
+        except Exception:
+            pass
+
     def setup_overlay_mode(self) -> None:
         try:
             self._root.update_idletasks()
             hwnd = get_hwnd(self._root)
             style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            style |= WS_EX_TOPMOST | WS_EX_LAYERED
+            style |= WS_EX_TOPMOST | WS_EX_LAYERED | WS_EX_TRANSPARENT
             user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+            user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
             user32.SetLayeredWindowAttributes(hwnd, 0, int(0.92 * 255), LWA_ALPHA)
             self._is_click_through = True
             self._overlay_enforced = True
-            if self._overlay_status_label:
-                self._overlay_status_label.configure(text="Overlay Mode (Click-Through) – Hotkey to Unlock")
-            if self._overlay_toggle_btn:
-                self._overlay_toggle_btn.configure(text="Unlock Overlay", fg_color=COLOR_DANGER, hover_color="#CC2244")
+            self._update_overlay_ui_text()
             self._root.attributes("-alpha", 0.92)
             self._enforce_topmost()
         except Exception:
@@ -124,6 +143,28 @@ class AppGui:
             pass
         self._root.after(300, self._enforce_topmost)
 
+    def _overlay_hotkey_display(self) -> str:
+        return (self._settings.get("overlay_toggle_hotkey") or "ctrl+alt+o").replace("+", "+").upper()
+
+    def _update_overlay_ui_text(self) -> None:
+        hotkey = self._overlay_hotkey_display()
+        if self._overlay_status_label:
+            if self._is_click_through:
+                self._overlay_status_label.configure(
+                    text=f"Click-through ON – Press {hotkey} to unlock (button cannot be clicked)"
+                )
+            else:
+                self._overlay_status_label.configure(text="Interactive Mode – Click Lock Overlay or use hotkey")
+        if self._overlay_toggle_btn:
+            if self._is_click_through:
+                self._overlay_toggle_btn.configure(
+                    text="Unlock Overlay", fg_color=COLOR_DANGER, hover_color="#CC2244", text_color="white"
+                )
+            else:
+                self._overlay_toggle_btn.configure(
+                    text="Lock Overlay", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000"
+                )
+
     def toggle_click_through(self) -> None:
         try:
             hwnd = get_hwnd(self._root)
@@ -132,19 +173,13 @@ class AppGui:
                 style &= ~WS_EX_TRANSPARENT
                 self._root.attributes("-alpha", 1.0)
                 self._is_click_through = False
-                if self._overlay_status_label:
-                    self._overlay_status_label.configure(text="Interactive Mode – Click to Lock")
-                if self._overlay_toggle_btn:
-                    self._overlay_toggle_btn.configure(text="Lock Overlay", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000")
             else:
                 style |= WS_EX_TRANSPARENT
                 self._root.attributes("-alpha", 0.92)
                 self._is_click_through = True
-                if self._overlay_status_label:
-                    self._overlay_status_label.configure(text="Overlay Mode (Click-Through) – Hotkey to Unlock")
-                if self._overlay_toggle_btn:
-                    self._overlay_toggle_btn.configure(text="Unlock Overlay", fg_color=COLOR_DANGER, hover_color="#CC2244", text_color="white")
             user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+            user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
+            self._update_overlay_ui_text()
         except Exception:
             pass
 
