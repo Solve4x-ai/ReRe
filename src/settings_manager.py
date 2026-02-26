@@ -35,8 +35,10 @@ DEFAULTS = {
     "use_qpc_time": False,
     "obfuscate_process_name": False,
     "generic_window_title": "",
-    "start_in_overlay_mode": True,
+    "start_in_overlay_mode": False,
     "overlay_toggle_hotkey": "ctrl+alt+o",
+    "overlay_opacity": 1.0,
+    "overlay_click_through": False,
 }
 
 # Anti-detection profile presets (applied when profile changes to non-Custom)
