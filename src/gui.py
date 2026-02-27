@@ -9,10 +9,12 @@ from datetime import datetime
 
 import ctypes
 from ctypes import wintypes
+import tkinter.simpledialog as simpledialog
 
 import customtkinter as ctk
 
 from src import config
+from src import profile_manager
 
 # --- Window transparency (layered + alpha) ---
 GWL_EXSTYLE = -20
@@ -83,6 +85,8 @@ class AppGui:
         self._current_macro_path: str | None = None
         self._current_macro_name: str | None = None
         self._settings = settings_manager.load_settings()
+        self._profiles = profile_manager.load_profiles()
+        self._current_profile: str | None = None
         self._apply_macros_dir_override()
         self._recorded_count_var: ctk.StringVar | None = None
         self._progress_var: ctk.DoubleVar | None = None
@@ -392,10 +396,25 @@ class AppGui:
         key_frame.pack(side="left", fill="both", expand=True, padx=(0, 5))
         ctk.CTkLabel(key_frame, text="Key Press Spammer", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=12, pady=(12, 6))
 
-        key_names = sorted(config.SCAN_CODES.keys(), key=lambda x: (x not in ["space", "enter", "shift", "ctrl", "alt"], x))
-        key_combo = ctk.CTkComboBox(key_frame, values=key_names, width=180, state="readonly")
+        self._key_names = sorted(
+            config.SCAN_CODES.keys(),
+            key=lambda x: (x not in ["space", "enter", "shift", "ctrl", "alt"], x),
+        )
+        key_combo = ctk.CTkComboBox(key_frame, values=self._key_names, width=1, state="readonly")
         key_combo.set("space")
-        key_combo.pack(anchor="w", padx=12, pady=4)
+        # Keep combo hidden; use custom picker for UX, but reuse combo's value.
+        self._quick_key_combo = key_combo
+
+        key_row = ctk.CTkFrame(key_frame, fg_color="transparent")
+        key_row.pack(anchor="w", padx=12, pady=4)
+        ctk.CTkLabel(key_row, text="Key:", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 6))
+        self._quick_key_button = ctk.CTkButton(
+            key_row,
+            text="space ▾",
+            width=150,
+            command=self._open_key_picker,
+        )
+        self._quick_key_button.pack(side="left")
 
         tap_hold = ctk.CTkSegmentedButton(key_frame, values=["Tap", "Hold"])
         tap_hold.pack(anchor="w", padx=12, pady=4)
@@ -429,7 +448,6 @@ class AppGui:
         )
         key_toggle_btn.pack(pady=12, padx=12, fill="x")
         key_toggle_btn.configure(cursor="hand2")
-        self._quick_key_combo = key_combo
         self._quick_tap_hold = tap_hold
         self._quick_key_interval_slider = key_interval
         self._quick_key_interval_entry = key_interval_entry
@@ -541,7 +559,13 @@ class AppGui:
             nulls = r.get("insert_nulls_count")
             self._human_labels["insert_nulls"].configure(text=str(nulls) if nulls is not None else "—")
             qpc = r.get("qpc_used")
-            self._human_labels["qpc"].configure(text="yes" if qpc else "no" if qpc is False else "—")
+            qpc_time = r.get("qpc_time_value")
+            if qpc and qpc_time is not None:
+                self._human_labels["qpc"].configure(text=f"yes (0x{int(qpc_time) & 0xFFFFFFFF:08X})")
+            elif qpc is False:
+                self._human_labels["qpc"].configure(text="no")
+            else:
+                self._human_labels["qpc"].configure(text="—")
         self._root.after(350, self._poll_humanization_report)
 
     def _parse_interval(self, slider: ctk.CTkSlider, entry: ctk.CTkEntry, lo: int, hi: int, default: int) -> int:
@@ -558,6 +582,92 @@ class AppGui:
             return max(10, min(9999, int(entry.get().strip())))
         except ValueError:
             return 100
+
+    # --- Profiles: capture/apply full configuration snapshots ---
+
+    def _collect_quick_actions_state(self) -> dict:
+        """Collect current Quick Actions state for profile snapshots."""
+        state: dict = {}
+        try:
+            state["quick_randomize"] = bool(self._quick_randomize.get())
+            state["quick_speed"] = float(self._quick_speed.get())
+            state["key_name"] = self._quick_key_combo.get()
+            state["tap_hold"] = self._quick_tap_hold.get()
+            state["key_interval"] = self._parse_interval(
+                self._quick_key_interval_slider, self._quick_key_interval_entry,
+                config.KEY_SPAM_INTERVAL_MS_MIN, config.KEY_SPAM_INTERVAL_MS_MAX, 200,
+            )
+            state["key_count_infinite"] = bool(self._quick_key_count_infinite.get())
+            key_count = self._parse_count(self._quick_key_count_infinite, self._quick_key_count_entry)
+            state["key_count"] = 0 if key_count is None else int(key_count)
+            state["mouse_button"] = self._quick_mouse_btn.get()
+            state["mouse_mode"] = self._quick_mouse_single_repeat.get()
+            state["mouse_interval"] = self._parse_interval(
+                self._quick_mouse_interval_slider, self._quick_mouse_interval_entry,
+                config.MOUSE_CLICK_INTERVAL_MS_MIN, config.MOUSE_CLICK_INTERVAL_MS_MAX, 200,
+            )
+            state["mouse_count_infinite"] = bool(self._quick_mouse_count_infinite.get())
+            mouse_count = self._parse_count(self._quick_mouse_count_infinite, self._quick_mouse_count_entry)
+            state["mouse_count"] = 0 if mouse_count is None else int(mouse_count)
+        except Exception:
+            pass
+        return state
+
+    def _apply_quick_actions_state(self, state: dict) -> None:
+        """Apply Quick Actions state from a profile without starting anything."""
+        try:
+            if "quick_randomize" in state:
+                if state["quick_randomize"]:
+                    self._quick_randomize.select()
+                else:
+                    self._quick_randomize.deselect()
+            if "quick_speed" in state and getattr(self, "_quick_speed", None):
+                val = float(state["quick_speed"])
+                self._quick_speed.set(val)
+            key_name = state.get("key_name")
+            if key_name and getattr(self, "_quick_key_combo", None):
+                if key_name in getattr(self, "_key_names", []):
+                    self._quick_key_combo.set(key_name)
+                    self._quick_key_button.configure(text=f"{key_name} ▾")
+            tap_hold = state.get("tap_hold")
+            if tap_hold and getattr(self, "_quick_tap_hold", None):
+                self._quick_tap_hold.set(tap_hold)
+            if "key_interval" in state:
+                ki = int(state["key_interval"])
+                self._quick_key_interval_slider.set(ki)
+                self._quick_key_interval_entry.delete(0, "end")
+                self._quick_key_interval_entry.insert(0, str(ki))
+            if "key_count_infinite" in state:
+                if state["key_count_infinite"]:
+                    self._quick_key_count_infinite.select()
+                else:
+                    self._quick_key_count_infinite.deselect()
+            if "key_count" in state and not state.get("key_count_infinite", False):
+                kc = int(state["key_count"])
+                self._quick_key_count_entry.delete(0, "end")
+                self._quick_key_count_entry.insert(0, str(kc))
+            mb = state.get("mouse_button")
+            if mb and getattr(self, "_quick_mouse_btn", None):
+                self._quick_mouse_btn.set(mb)
+            mmode = state.get("mouse_mode")
+            if mmode and getattr(self, "_quick_mouse_single_repeat", None):
+                self._quick_mouse_single_repeat.set(mmode)
+            if "mouse_interval" in state:
+                mi = int(state["mouse_interval"])
+                self._quick_mouse_interval_slider.set(mi)
+                self._quick_mouse_interval_entry.delete(0, "end")
+                self._quick_mouse_interval_entry.insert(0, str(mi))
+            if "mouse_count_infinite" in state:
+                if state["mouse_count_infinite"]:
+                    self._quick_mouse_count_infinite.select()
+                else:
+                    self._quick_mouse_count_infinite.deselect()
+            if "mouse_count" in state and not state.get("mouse_count_infinite", False):
+                mc = int(state["mouse_count"])
+                self._quick_mouse_count_entry.delete(0, "end")
+                self._quick_mouse_count_entry.insert(0, str(mc))
+        except Exception:
+            pass
 
     def _toggle_key_spammer(self) -> None:
         if self._controller.is_key_spammer_running():
@@ -658,6 +768,83 @@ class AppGui:
         if getattr(self, "_quick_mouse_interval_display_var", None):
             self._quick_mouse_interval_display_var.set("Last interval: — ms")
         self._root.after(0, self._update_state_badge)
+
+    # --- Profiles handlers ---
+
+    def _on_profile_selected(self, name: str) -> None:
+        if not name:
+            return
+        self._current_profile = name
+        prof = self._profiles.get(name)
+        if not isinstance(prof, dict):
+            return
+        settings_snapshot = prof.get("settings") or {}
+        if isinstance(settings_snapshot, dict):
+            # Apply settings snapshot to in-memory settings and persist behaviour-level config.
+            self._settings.update(settings_snapshot)
+            settings_manager.save_settings(self._settings)
+            config.update_from_settings(self._settings)
+            from src import input_backend
+            input_backend.set_stealth_options(
+                config.get_insert_nulls(),
+                config.get_use_qpc_time(),
+                config.get_input_mix_ratio(),
+            )
+            self._apply_window_title()
+            self._apply_macros_dir_override()
+            self._update_always_on_top()
+            self._on_settings_saved()
+        qa = prof.get("quick_actions") or {}
+        if isinstance(qa, dict):
+            self._apply_quick_actions_state(qa)
+
+    def _handle_profile_save_as(self) -> None:
+        name = simpledialog.askstring("Save Profile", "Profile name:", parent=self._root)
+        if not name:
+            return
+        name = name.strip()
+        if not name:
+            return
+        snapshot = {
+            "settings": dict(self._settings),
+            "quick_actions": self._collect_quick_actions_state(),
+        }
+        self._profiles[name] = snapshot
+        profile_manager.save_profiles(self._profiles)
+        # Refresh combo values
+        names = sorted(self._profiles.keys())
+        self._profile_combo.configure(values=names)
+        self._profile_combo.set(name)
+        self._current_profile = name
+
+    def _handle_profile_overwrite(self) -> None:
+        name = getattr(self, "_current_profile", None) or (self._profile_combo.get() if hasattr(self, "_profile_combo") else None)
+        if not name:
+            return
+        snapshot = {
+            "settings": dict(self._settings),
+            "quick_actions": self._collect_quick_actions_state(),
+        }
+        self._profiles[name] = snapshot
+        profile_manager.save_profiles(self._profiles)
+
+    def _handle_profile_delete(self) -> None:
+        name = getattr(self, "_current_profile", None) or (self._profile_combo.get() if hasattr(self, "_profile_combo") else None)
+        if not name:
+            return
+        if name in self._profiles:
+            del self._profiles[name]
+            profile_manager.save_profiles(self._profiles)
+        names = sorted(self._profiles.keys()) or ["Default"]
+        if names == ["Default"] and "Default" not in self._profiles:
+            self._profiles["Default"] = {
+                "settings": dict(self._settings),
+                "quick_actions": self._collect_quick_actions_state(),
+            }
+            profile_manager.save_profiles(self._profiles)
+        self._profile_combo.configure(values=names)
+        self._profile_combo.set(names[0])
+        self._current_profile = names[0]
 
     def trigger_key_spammer_start(self) -> None:
         if self._controller.is_key_spammer_running():
@@ -834,6 +1021,28 @@ class AppGui:
     def _build_settings_tab(self, parent: ctk.CTkFrame) -> None:
         s = ctk.CTkScrollableFrame(parent, fg_color="transparent")
         s.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # --- Profiles ---
+        profiles_row = ctk.CTkFrame(s, fg_color="transparent")
+        profiles_row.pack(fill="x", pady=(0, 10))
+        ctk.CTkLabel(profiles_row, text="Profiles", font=ctk.CTkFont(weight="bold", size=14)).pack(side="left", padx=(0, 8))
+        profile_names = sorted(self._profiles.keys()) if getattr(self, "_profiles", None) else []
+        if not profile_names:
+            profile_names = ["Default"]
+            if "Default" not in self._profiles:
+                self._profiles["Default"] = {
+                    "settings": dict(self._settings),
+                    "quick_actions": self._collect_quick_actions_state(),
+                }
+                profile_manager.save_profiles(self._profiles)
+        self._profile_combo = ctk.CTkComboBox(profiles_row, values=profile_names, width=180, state="readonly",
+                                              command=self._on_profile_selected)
+        self._profile_combo.pack(side="left", padx=(0, 8))
+        self._profile_combo.set(profile_names[0])
+        self._current_profile = profile_names[0]
+        ctk.CTkButton(profiles_row, text="Save as…", width=90, command=self._handle_profile_save_as).pack(side="left", padx=2)
+        ctk.CTkButton(profiles_row, text="Overwrite", width=90, command=self._handle_profile_overwrite).pack(side="left", padx=2)
+        ctk.CTkButton(profiles_row, text="Delete", width=90, fg_color=COLOR_DANGER, command=self._handle_profile_delete).pack(side="left", padx=2)
 
         # --- Appearance ---
         ctk.CTkLabel(s, text="Appearance", font=ctk.CTkFont(weight="bold", size=14)).pack(anchor="w", pady=(0, 8))
