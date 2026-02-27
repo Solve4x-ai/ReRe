@@ -179,7 +179,8 @@ class PlaybackController:
             # for count or until stop. Timing is based on when the key is actually
             # pressed (matches game respawn that keys off collection time).
             n = 0
-            while not self._key_spam_stop.is_set():
+            stop = self._key_spam_stop
+            while not stop.is_set():
                 if count is not None and n >= count:
                     break
                 input_backend.key_down(sc)
@@ -192,9 +193,10 @@ class PlaybackController:
                 actual_ms = interval_ms + jitter_ms
                 self._last_key_interval_ms = actual_ms
                 delay_sec = max(0.001, actual_ms / 1000.0)
-                end = time.perf_counter() + delay_sec
-                while time.perf_counter() < end and not self._key_spam_stop.is_set():
-                    time.sleep(0.001)
+                # Wait cooperatively so other keys/clicks or CPU load don't break the schedule.
+                stop.wait(delay_sec)
+                if stop.is_set():
+                    break
         else:
             # Hold = key down until stop, then key up
             input_backend.key_down(sc)
@@ -253,7 +255,8 @@ class PlaybackController:
             self._mouse_clicker_thread = None
             return
         n = 0
-        while not self._mouse_clicker_stop.is_set():
+        stop = self._mouse_clicker_stop
+        while not stop.is_set():
             if count is not None and n >= count:
                 break
             input_backend.mouse_button_down(down_flag)
@@ -265,9 +268,9 @@ class PlaybackController:
             actual_ms = interval_ms + jitter_ms
             self._last_mouse_interval_ms = actual_ms
             delay_sec = max(0.001, actual_ms / 1000.0)
-            end = time.perf_counter() + delay_sec
-            while time.perf_counter() < end and not self._mouse_clicker_stop.is_set():
-                time.sleep(0.001)
+            stop.wait(delay_sec)
+            if stop.is_set():
+                break
         self._mouse_clicker_thread = None
 
     def stop_mouse_clicker(self) -> None:
