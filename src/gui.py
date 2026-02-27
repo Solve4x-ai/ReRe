@@ -527,6 +527,51 @@ class AppGui:
             self._human_labels[key] = lbl
         self._poll_humanization_report()
 
+    def _open_key_picker(self) -> None:
+        """Open a compact, scrollable key picker dialog."""
+        if not getattr(self, "_key_names", None):
+            return
+
+        dialog = ctk.CTkToplevel(self._root)
+        dialog.title("Select key")
+        dialog.geometry("260x320")
+        dialog.transient(self._root)
+        dialog.grab_set()
+
+        frame = ctk.CTkScrollableFrame(dialog, fg_color="transparent")
+        frame.pack(fill="both", expand=True, padx=8, pady=8)
+
+        def select_key(name: str) -> None:
+            try:
+                self._quick_key_combo.set(name)
+                if getattr(self, "_quick_key_button", None):
+                    self._quick_key_button.configure(text=f"{name} ▾")
+            except Exception:
+                pass
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            dialog.destroy()
+
+        for name in self._key_names:
+            btn = ctk.CTkButton(
+                frame,
+                text=name,
+                width=200,
+                command=lambda n=name: select_key(n),
+            )
+            btn.pack(anchor="w", padx=4, pady=2)
+
+        def on_close() -> None:
+            try:
+                dialog.grab_release()
+            except Exception:
+                pass
+            dialog.destroy()
+
+        dialog.protocol("WM_DELETE_WINDOW", on_close)
+
     def _poll_humanization_report(self) -> None:
         try:
             from src import humanization_report
