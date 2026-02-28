@@ -1,10 +1,11 @@
 """
-Professional customtkinter GUI: 4 tabs (Quick Actions, Macro Recorder, Macro Library, Settings).
+Professional customtkinter GUI: Key Presser, Mouse Clicker, Macro Recorder, Macro Library, Settings.
 Toolbar with state badge, always-on-top, transparency, and emergency stop (exits app).
 """
 
 import os
 import sys
+import time
 from datetime import datetime
 
 import ctypes
@@ -73,8 +74,8 @@ COLOR_ACCENT = "#00FF9D"
 COLOR_DANGER = "#FF2D55"
 COLOR_CARD = ("#E8E8E8", "#2A2A2A")  # light mode, dark mode
 COLOR_BORDER = ("#ccc", "#333")
-MIN_WIDTH = 920
-MIN_HEIGHT = 780
+MIN_WIDTH = 616   # ~33% narrower than original 920
+MIN_HEIGHT = 700
 INTERVAL_MAX_MS = 600_000  # 10 minutes
 
 
@@ -96,15 +97,21 @@ class AppGui:
         self._playback_progress_job: str | None = None
         self._window_transparency = float(self._settings.get("window_transparency", 0.0))
         self._configure_after_id: str | None = None
+        self._last_configure_size: tuple[int, int] | None = None
         self._transparency_slider: ctk.CTkSlider | None = None
         self._always_on_top_var: ctk.BooleanVar | None = None
+        self._quick_key_selected: str = "space"
+        self._quick_key_display: ctk.CTkButton | None = None
+        self._key_dropdown_container: ctk.CTkFrame | None = None
 
-        ctk.set_appearance_mode(self._settings.get("theme", "Dark"))
+        # Force dark theme only
+        ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("green")
         self._root = ctk.CTk()
         self._apply_window_title()
         self._root.minsize(MIN_WIDTH, MIN_HEIGHT)
         self._root.geometry(f"{MIN_WIDTH}x{MIN_HEIGHT}")
+        self._root.resizable(False, False)
         self._root.after(200, self._center_window)
 
         self._controller._on_state_change = self._on_state_change
@@ -119,10 +126,22 @@ class AppGui:
         self._apply_initial_transparency()
 
     def _on_configure(self, event) -> None:
-        """Force complete redraw on resize to eliminate ghosting with layered windows."""
+        """Trigger a redraw only when the window is resized to avoid ghosting and drag jitter."""
+        try:
+            size = (event.width, event.height)
+        except Exception:
+            size = None
+
+        # Only react to real size changes (ignore pure move events)
+        if size is not None:
+            if self._last_configure_size == size:
+                return
+            self._last_configure_size = size
+
         if self._configure_after_id:
             self._root.after_cancel(self._configure_after_id)
-        self._configure_after_id = self._root.after(10, self._force_full_redraw)
+        # Slightly longer delay to coalesce rapid resize events
+        self._configure_after_id = self._root.after(50, self._force_full_redraw)
 
     def _force_full_redraw(self) -> None:
         """Full redraw of window and all children (fixes ghosting with layered window)."""
@@ -133,24 +152,16 @@ class AppGui:
                 hwnd, None, None,
                 RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN | RDW_ERASE,
             )
+            # Let Tk handle painting in its normal event loop; just flush pending geometry/layout.
             self._root.update_idletasks()
-            self._root.update()
         except Exception:
             pass
 
     def _apply_initial_transparency(self) -> None:
         """Apply saved window transparency and topmost on startup."""
         try:
-            hwnd = get_hwnd(self._root)
-            if not hwnd:
-                return
             alpha = transparency_to_alpha(self._window_transparency)
-            ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            if not (ex & WS_EX_LAYERED):
-                user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex | WS_EX_LAYERED)
-            user32.SetLayeredWindowAttributes(hwnd, 0, int(round(255 * alpha)), LWA_ALPHA)
-            if self._settings.get("always_on_top", False):
-                user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_FRAMECHANGED)
+            self._root.attributes("-alpha", alpha)
         except Exception:
             pass
 
@@ -160,13 +171,6 @@ class AppGui:
         try:
             alpha = transparency_to_alpha(self._window_transparency)
             self._root.attributes("-alpha", alpha)
-            hwnd = get_hwnd(self._root)
-            style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            if not (style & WS_EX_LAYERED):
-                user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED)
-            user32.SetLayeredWindowAttributes(hwnd, 0, int(round(255 * alpha)), LWA_ALPHA)
-            user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
-            self._force_full_redraw()
         except Exception:
             pass
 
@@ -307,6 +311,28 @@ class AppGui:
         )
         self._state_badge.pack(side="left", padx=8, pady=8)
 
+        # Toolbar-level profile selector (quick profile switching)
+        profile_names = sorted(self._profiles.keys()) if getattr(self, "_profiles", None) else []
+        if profile_names:
+            self._toolbar_profile_combo = ctk.CTkComboBox(
+                toolbar,
+                values=profile_names,
+                width=180,
+                state="readonly",
+                command=self._on_profile_selected,
+            )
+            initial = self._current_profile or profile_names[0]
+            self._toolbar_profile_combo.set(initial)
+        else:
+            self._toolbar_profile_combo = ctk.CTkComboBox(
+                toolbar,
+                values=["No profiles"],
+                width=180,
+                state="disabled",
+            )
+            self._toolbar_profile_combo.set("No profiles")
+        self._toolbar_profile_combo.pack(side="right", padx=8, pady=10)
+
         self._always_on_top_var = ctk.BooleanVar(value=bool(self._settings.get("always_on_top", False)))
         always_on_top_cb = ctk.CTkCheckBox(
             toolbar, text="Always on top", variable=self._always_on_top_var, command=self._on_always_on_top_changed
@@ -356,18 +382,20 @@ class AppGui:
         tabview = ctk.CTkTabview(self._root, fg_color=COLOR_CARD, corner_radius=8)
         tabview.pack(fill="both", expand=True, padx=10, pady=6)
 
-        tabview.add("Quick Actions")
+        tabview.add("Key Presser")
+        tabview.add("Mouse Clicker")
         tabview.add("Macro Recorder")
         tabview.add("Macro Library")
         tabview.add("Settings")
-        tabview.set("Quick Actions")
+        tabview.set("Key Presser")
 
-        self._build_quick_actions_tab(tabview.tab("Quick Actions"))
+        self._build_key_presser_tab(tabview.tab("Key Presser"))
+        self._build_mouse_clicker_tab(tabview.tab("Mouse Clicker"))
         self._build_recorder_tab(tabview.tab("Macro Recorder"))
         self._build_library_tab(tabview.tab("Macro Library"))
         self._build_settings_tab(tabview.tab("Settings"))
 
-    def _build_quick_actions_tab(self, parent: ctk.CTkFrame) -> None:
+    def _build_key_presser_tab(self, parent: ctk.CTkFrame) -> None:
         # Top row: global options (always visible without expanding window)
         shared = ctk.CTkFrame(parent, fg_color="transparent")
         shared.pack(fill="x", padx=10, pady=(10, 6))
@@ -387,34 +415,40 @@ class AppGui:
         self._quick_speed.configure(command=on_speed_changed)
         on_speed_changed(1.0)
 
-        # Two panels side by side
-        panes = ctk.CTkFrame(parent, fg_color="transparent")
-        panes.pack(fill="both", expand=True, padx=10, pady=6)
-
-        # Key Press Spammer
-        key_frame = ctk.CTkFrame(panes, fg_color=COLOR_CARD, corner_radius=8, border_width=1, border_color="#333")
-        key_frame.pack(side="left", fill="both", expand=True, padx=(0, 5))
-        ctk.CTkLabel(key_frame, text="Key Press Spammer", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=12, pady=(12, 6))
+        # Key Presser card (single column on this tab)
+        key_frame = ctk.CTkFrame(parent, fg_color=COLOR_CARD, corner_radius=8, border_width=1, border_color="#333")
+        key_frame.pack(fill="x", padx=10, pady=6)
+        ctk.CTkLabel(key_frame, text="Key Presser", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=12, pady=(12, 6))
 
         self._key_names = sorted(
             config.SCAN_CODES.keys(),
             key=lambda x: (x not in ["space", "enter", "shift", "ctrl", "alt"], x),
         )
-        key_combo = ctk.CTkComboBox(key_frame, values=self._key_names, width=1, state="readonly")
-        key_combo.set("space")
-        # Keep combo hidden; use custom picker for UX, but reuse combo's value.
-        self._quick_key_combo = key_combo
-
         key_row = ctk.CTkFrame(key_frame, fg_color="transparent")
         key_row.pack(anchor="w", padx=12, pady=4)
         ctk.CTkLabel(key_row, text="Key:", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 6))
-        self._quick_key_button = ctk.CTkButton(
+        self._quick_key_display = ctk.CTkButton(
             key_row,
-            text="space ▾",
-            width=150,
-            command=self._open_key_picker,
+            text=f"{self._quick_key_selected} ▾",
+            width=140,
+            command=self._toggle_key_dropdown,
         )
-        self._quick_key_button.pack(side="left")
+        self._quick_key_display.pack(side="left")
+
+        # Inline dropdown container (initially hidden)
+        self._key_dropdown_container = ctk.CTkFrame(
+            key_frame, fg_color=COLOR_CARD, corner_radius=6, border_width=1, border_color="#333"
+        )
+        dropdown_sf = ctk.CTkScrollableFrame(self._key_dropdown_container, width=200, height=180, fg_color="transparent")
+        dropdown_sf.pack(fill="both", expand=True, padx=4, pady=4)
+        for name in self._key_names:
+            btn = ctk.CTkButton(
+                dropdown_sf,
+                text=name,
+                width=180,
+                command=lambda n=name: self._select_key(n),
+            )
+            btn.pack(anchor="w", padx=2, pady=1)
 
         tap_hold = ctk.CTkSegmentedButton(key_frame, values=["Tap", "Hold"])
         tap_hold.pack(anchor="w", padx=12, pady=4)
@@ -442,6 +476,23 @@ class AppGui:
         key_interval_display_var = ctk.StringVar(value="Last interval: — ms")
         key_interval_display = ctk.CTkLabel(key_frame, textvariable=key_interval_display_var, font=ctk.CTkFont(size=13, weight="bold"), text_color="#00FF9D")
         key_interval_display.pack(anchor="w", padx=12, pady=(4, 0))
+
+        # Countdown progress bar: fills as next key press approaches
+        key_countdown_row = ctk.CTkFrame(key_frame, fg_color="transparent")
+        key_countdown_row.pack(fill="x", padx=12, pady=(8, 4))
+        ctk.CTkLabel(key_countdown_row, text="Next press", font=ctk.CTkFont(size=11)).pack(side="left", padx=(0, 8))
+        self._key_countdown_progress_var = ctk.DoubleVar(value=0.0)
+        self._key_countdown_bar = ctk.CTkProgressBar(
+            key_countdown_row,
+            variable=self._key_countdown_progress_var,
+            width=220,
+            height=8,
+            corner_radius=4,
+            fg_color="#1a1a1a",
+            progress_color=COLOR_ACCENT,
+        )
+        self._key_countdown_bar.pack(side="left", fill="x", expand=True)
+
         key_toggle_btn = ctk.CTkButton(
             key_frame, text="Start Spamming", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000",
             command=self._toggle_key_spammer
@@ -456,10 +507,38 @@ class AppGui:
         self._quick_key_toggle_btn = key_toggle_btn
         self._quick_key_interval_display_var = key_interval_display_var
 
-        # Mouse Auto-Clicker
-        mouse_frame = ctk.CTkFrame(panes, fg_color=COLOR_CARD, corner_radius=8, border_width=1, border_color="#333")
-        mouse_frame.pack(side="left", fill="both", expand=True, padx=(5, 0))
-        ctk.CTkLabel(mouse_frame, text="Mouse Auto-Clicker", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=12, pady=(12, 6))
+        # Humanization: last-applied values (real-time proof)
+        human_frame = ctk.CTkFrame(parent, fg_color=COLOR_CARD, corner_radius=8, border_width=1, border_color="#333")
+        human_frame.pack(fill="x", padx=10, pady=(8, 10))
+        ctk.CTkLabel(human_frame, text="Humanization (last applied)", font=ctk.CTkFont(weight="bold", size=12)).pack(anchor="w", padx=12, pady=(10, 6))
+        self._human_labels: dict[str, ctk.CTkLabel] = {}
+        for key, label_text in [
+            ("delay_jitter", "Gaussian delay jitter:"),
+            ("key_hold", "Variable key hold:"),
+            ("drift", "Session drift (±%):"),
+            ("micro_pause", "Micro-pauses:"),
+            ("insert_nulls", "Insert nulls:"),
+            ("qpc", "Use QPC time:"),
+        ]:
+            row = ctk.CTkFrame(human_frame, fg_color="transparent")
+            row.pack(fill="x", padx=12, pady=2)
+            ctk.CTkLabel(row, text=label_text, font=ctk.CTkFont(size=11), width=160, anchor="w").pack(side="left")
+            lbl = ctk.CTkLabel(row, text="—", font=ctk.CTkFont(size=11), text_color=COLOR_ACCENT)
+            lbl.pack(side="left")
+            self._human_labels[key] = lbl
+        hint = ctk.CTkLabel(
+            human_frame,
+            text="Updated during macro playback when randomization and humanization are enabled.",
+            font=ctk.CTkFont(size=10),
+        )
+        hint.pack(anchor="w", padx=12, pady=(4, 8))
+        self._poll_humanization_report()
+
+    def _build_mouse_clicker_tab(self, parent: ctk.CTkFrame) -> None:
+        """Mouse Clicker tab: auto-clicker controls only."""
+        mouse_frame = ctk.CTkFrame(parent, fg_color=COLOR_CARD, corner_radius=8, border_width=1, border_color="#333")
+        mouse_frame.pack(fill="x", padx=10, pady=10)
+        ctk.CTkLabel(mouse_frame, text="Mouse Clicker", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=12, pady=(12, 6))
 
         mouse_btn = ctk.CTkSegmentedButton(mouse_frame, values=["Left Click", "Right Click"])
         mouse_btn.pack(anchor="w", padx=12, pady=4)
@@ -489,8 +568,7 @@ class AppGui:
         self._restrict_entry_to_digits(mouse_count_entry)
 
         mouse_interval_display_var = ctk.StringVar(value="Last interval: — ms")
-        mouse_interval_display = ctk.CTkLabel(mouse_frame, textvariable=mouse_interval_display_var, font=ctk.CTkFont(size=13, weight="bold"), text_color="#00FF9D")
-        mouse_interval_display.pack(anchor="w", padx=12, pady=(4, 0))
+        ctk.CTkLabel(mouse_frame, textvariable=mouse_interval_display_var, font=ctk.CTkFont(size=13, weight="bold"), text_color="#00FF9D").pack(anchor="w", padx=12, pady=(4, 0))
         mouse_toggle_btn = ctk.CTkButton(
             mouse_frame, text="Start Clicking", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000",
             command=self._toggle_mouse_clicker
@@ -506,71 +584,7 @@ class AppGui:
         self._quick_mouse_toggle_btn = mouse_toggle_btn
         self._quick_mouse_interval_display_var = mouse_interval_display_var
 
-        # Humanization: last-applied values (real-time proof)
-        human_frame = ctk.CTkFrame(parent, fg_color=COLOR_CARD, corner_radius=8, border_width=1, border_color="#333")
-        human_frame.pack(fill="x", padx=10, pady=(8, 10))
-        ctk.CTkLabel(human_frame, text="Humanization (last applied)", font=ctk.CTkFont(weight="bold", size=12)).pack(anchor="w", padx=12, pady=(10, 6))
-        self._human_labels: dict[str, ctk.CTkLabel] = {}
-        for key, label_text in [
-            ("delay_jitter", "Gaussian delay jitter:"),
-            ("key_hold", "Variable key hold:"),
-            ("drift", "Session drift (±%):"),
-            ("micro_pause", "Micro-pauses:"),
-            ("insert_nulls", "Insert nulls:"),
-            ("qpc", "Use QPC time:"),
-        ]:
-            row = ctk.CTkFrame(human_frame, fg_color="transparent")
-            row.pack(fill="x", padx=12, pady=2)
-            ctk.CTkLabel(row, text=label_text, font=ctk.CTkFont(size=11), width=160, anchor="w").pack(side="left")
-            lbl = ctk.CTkLabel(row, text="—", font=ctk.CTkFont(size=11), text_color=COLOR_ACCENT)
-            lbl.pack(side="left")
-            self._human_labels[key] = lbl
-        self._poll_humanization_report()
-
-    def _open_key_picker(self) -> None:
-        """Open a compact, scrollable key picker dialog."""
-        if not getattr(self, "_key_names", None):
-            return
-
-        dialog = ctk.CTkToplevel(self._root)
-        dialog.title("Select key")
-        dialog.geometry("260x320")
-        dialog.transient(self._root)
-        dialog.grab_set()
-
-        frame = ctk.CTkScrollableFrame(dialog, fg_color="transparent")
-        frame.pack(fill="both", expand=True, padx=8, pady=8)
-
-        def select_key(name: str) -> None:
-            try:
-                self._quick_key_combo.set(name)
-                if getattr(self, "_quick_key_button", None):
-                    self._quick_key_button.configure(text=f"{name} ▾")
-            except Exception:
-                pass
-            try:
-                dialog.grab_release()
-            except Exception:
-                pass
-            dialog.destroy()
-
-        for name in self._key_names:
-            btn = ctk.CTkButton(
-                frame,
-                text=name,
-                width=200,
-                command=lambda n=name: select_key(n),
-            )
-            btn.pack(anchor="w", padx=4, pady=2)
-
-        def on_close() -> None:
-            try:
-                dialog.grab_release()
-            except Exception:
-                pass
-            dialog.destroy()
-
-        dialog.protocol("WM_DELETE_WINDOW", on_close)
+    # (Key picker now uses the inline dropdown; no separate dialog needed.)
 
     def _poll_humanization_report(self) -> None:
         try:
@@ -636,7 +650,7 @@ class AppGui:
         try:
             state["quick_randomize"] = bool(self._quick_randomize.get())
             state["quick_speed"] = float(self._quick_speed.get())
-            state["key_name"] = self._quick_key_combo.get()
+            state["key_name"] = getattr(self, "_quick_key_selected", "space")
             state["tap_hold"] = self._quick_tap_hold.get()
             state["key_interval"] = self._parse_interval(
                 self._quick_key_interval_slider, self._quick_key_interval_entry,
@@ -670,10 +684,10 @@ class AppGui:
                 val = float(state["quick_speed"])
                 self._quick_speed.set(val)
             key_name = state.get("key_name")
-            if key_name and getattr(self, "_quick_key_combo", None):
-                if key_name in getattr(self, "_key_names", []):
-                    self._quick_key_combo.set(key_name)
-                    self._quick_key_button.configure(text=f"{key_name} ▾")
+            if key_name and key_name in getattr(self, "_key_names", []):
+                self._quick_key_selected = key_name
+                if getattr(self, "_quick_key_display", None):
+                    self._quick_key_display.configure(text=f"{key_name} ▾")
             tap_hold = state.get("tap_hold")
             if tap_hold and getattr(self, "_quick_tap_hold", None):
                 self._quick_tap_hold.set(tap_hold)
@@ -720,8 +734,34 @@ class AppGui:
         else:
             self._start_key_spammer()
 
+    def _toggle_key_dropdown(self) -> None:
+        """Show or hide the inline key selection dropdown."""
+        if not getattr(self, "_key_dropdown_container", None):
+            return
+        try:
+            if self._key_dropdown_container.winfo_ismapped():
+                self._key_dropdown_container.pack_forget()
+            else:
+                self._key_dropdown_container.pack(anchor="w", padx=12, pady=(0, 4))
+        except Exception:
+            pass
+
+    def _select_key(self, key_name: str) -> None:
+        """Update selected key from the inline dropdown."""
+        self._quick_key_selected = key_name
+        if getattr(self, "_quick_key_display", None):
+            try:
+                self._quick_key_display.configure(text=f"{key_name} ▾")
+            except Exception:
+                pass
+        if getattr(self, "_key_dropdown_container", None):
+            try:
+                self._key_dropdown_container.pack_forget()
+            except Exception:
+                pass
+
     def _start_key_spammer(self) -> None:
-        key = self._quick_key_combo.get()
+        key = getattr(self, "_quick_key_selected", "space")
         tap = self._quick_tap_hold.get() == "Tap"
         interval = self._parse_interval(
             self._quick_key_interval_slider, self._quick_key_interval_entry,
@@ -732,6 +772,8 @@ class AppGui:
         self._quick_key_interval_entry.insert(0, str(interval))
         if self._quick_key_interval_display_var:
             self._quick_key_interval_display_var.set("Last interval: — ms")
+        if getattr(self, "_key_countdown_progress_var", None) is not None:
+            self._key_countdown_progress_var.set(0.0)
         self._controller.start_key_spammer(key, tap, interval, count, self._quick_randomize.get())
         btn = self._quick_key_toggle_btn
         btn.configure(text="Stop Spamming", fg_color=COLOR_DANGER, hover_color="#CC2244", text_color="white")
@@ -741,12 +783,21 @@ class AppGui:
 
     def _poll_key_interval_display(self, var: ctk.StringVar) -> None:
         if not self._controller.is_key_spammer_running():
+            if getattr(self, "_key_countdown_progress_var", None) is not None:
+                self._key_countdown_progress_var.set(0.0)
             self._root.after(0, self._refresh_key_spammer_ui)
             return
-        last = self._controller.get_last_key_interval_ms()
-        if last is not None:
-            var.set(f"Last interval: {int(round(last))} ms")
-        self._root.after(200, lambda: self._poll_key_interval_display(var))
+        last_ms = self._controller.get_last_key_interval_ms()
+        if last_ms is not None:
+            var.set(f"Last interval: {int(round(last_ms))} ms")
+        # Update countdown progress: 0 = just pressed, 1 = about to press
+        last_time = self._controller.get_last_key_execution_time()
+        if last_time is not None and last_ms is not None and last_ms > 0:
+            elapsed_ms = (time.perf_counter() - last_time) * 1000.0
+            progress = min(1.0, elapsed_ms / last_ms)
+            if getattr(self, "_key_countdown_progress_var", None) is not None:
+                self._key_countdown_progress_var.set(progress)
+        self._root.after(50, lambda: self._poll_key_interval_display(var))
 
     def _refresh_key_spammer_ui(self) -> None:
         if not self._controller.is_key_spammer_running() and getattr(self, "_quick_key_toggle_btn", None):
@@ -754,6 +805,8 @@ class AppGui:
             btn.configure(text="Start Spamming", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000")
             if getattr(self, "_quick_key_interval_display_var", None):
                 self._quick_key_interval_display_var.set("Last interval: — ms")
+            if getattr(self, "_key_countdown_progress_var", None) is not None:
+                self._key_countdown_progress_var.set(0.0)
             self._update_state_badge()
 
     def _stop_key_spammer(self) -> None:
@@ -762,6 +815,8 @@ class AppGui:
             self._quick_key_toggle_btn.configure(text="Start Spamming", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000")
         if getattr(self, "_quick_key_interval_display_var", None):
             self._quick_key_interval_display_var.set("Last interval: — ms")
+        if getattr(self, "_key_countdown_progress_var", None) is not None:
+            self._key_countdown_progress_var.set(0.0)
         self._root.after(0, self._update_state_badge)
 
     def _toggle_mouse_clicker(self) -> None:
@@ -819,6 +874,9 @@ class AppGui:
     def _on_profile_selected(self, name: str) -> None:
         if not name:
             return
+        # Avoid re-applying the same profile redundantly
+        if getattr(self, "_current_profile", None) == name:
+            return
         self._current_profile = name
         prof = self._profiles.get(name)
         if not isinstance(prof, dict):
@@ -842,6 +900,18 @@ class AppGui:
         qa = prof.get("quick_actions") or {}
         if isinstance(qa, dict):
             self._apply_quick_actions_state(qa)
+        # Keep toolbar and Settings profile combos in sync
+        if hasattr(self, "_profile_combo"):
+            try:
+                self._profile_combo.set(name)
+            except Exception:
+                pass
+        if hasattr(self, "_toolbar_profile_combo") and getattr(self, "_toolbar_profile_combo", None):
+            try:
+                if self._toolbar_profile_combo.cget("state") != "disabled":
+                    self._toolbar_profile_combo.set(name)
+            except Exception:
+                pass
 
     def _handle_profile_save_as(self) -> None:
         name = simpledialog.askstring("Save Profile", "Profile name:", parent=self._root)
@@ -1091,15 +1161,6 @@ class AppGui:
 
         # --- Appearance ---
         ctk.CTkLabel(s, text="Appearance", font=ctk.CTkFont(weight="bold", size=14)).pack(anchor="w", pady=(0, 8))
-        ctk.CTkLabel(s, text="Theme", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(0, 4))
-        theme_combo = ctk.CTkComboBox(s, values=["Dark", "Light", "System"], width=180)
-        theme_combo.set(self._settings.get("theme", "Dark"))
-        theme_combo.pack(anchor="w", pady=(0, 12))
-
-        ctk.CTkLabel(s, text="Window transparency (0% = solid, up to 95% = most transparent)", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(8, 4))
-        settings_transparency_slider = ctk.CTkSlider(s, from_=0.0, to=TRANSPARENCY_MAX, number_of_steps=19, width=200)
-        settings_transparency_slider.set(self._settings.get("window_transparency", 0.0))
-        settings_transparency_slider.pack(anchor="w", pady=2)
         ctk.CTkLabel(s, text="(Always on top is on the main page.)", font=ctk.CTkFont(size=11)).pack(anchor="w", pady=(0, 12))
 
         # --- Paths & startup ---
@@ -1192,12 +1253,8 @@ class AppGui:
                       command=lambda: self._record_hotkey("Mouse Clicker stop", mouse_clicker_stop_entry)).pack(side="left")
         ctk.CTkLabel(s, text="", height=0).pack(anchor="w", pady=(0, 8))
 
-        # --- Anti-Detection ---
-        ctk.CTkLabel(s, text="Anti-Detection", font=ctk.CTkFont(weight="bold", size=14)).pack(anchor="w", pady=(16, 8))
-        ctk.CTkLabel(s, text="Profile", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(4, 2))
-        profile_combo = ctk.CTkComboBox(s, values=["Safe", "Aggressive", "Stealth", "Custom"], width=180)
-        profile_combo.set(self._settings.get("antidetect_profile", "safe").capitalize())
-        profile_combo.pack(anchor="w", pady=(0, 8))
+        # --- Anti-Detection / Humanization ---
+        ctk.CTkLabel(s, text="Anti-Detection / Humanization", font=ctk.CTkFont(weight="bold", size=14)).pack(anchor="w", pady=(16, 8))
         adv_human = ctk.CTkCheckBox(s, text="Enable Advanced Humanization (gaussian jitter, drift, micro-pauses)")
         adv_human.pack(anchor="w", pady=4)
         if self._settings.get("advanced_humanization_enabled", True):
@@ -1205,16 +1262,34 @@ class AppGui:
         humanization_status_var = ctk.StringVar(value="Current: Off")
         HUMANIZATION_LABELS = ("Off", "Low", "Medium", "High", "Paranoid")
 
+        def _update_humanization_status() -> None:
+            idx = min(4, max(0, int(round(intensity_slider.get()))))
+            adv = adv_human.get()
+            nulls = insert_nulls_cb.get()
+            qpc = use_qpc_cb.get()
+            # Recommended flags for each intensity level
+            # 0: Off, 1: Low, 2: Medium, 3: High, 4: Paranoid
+            defaults = {
+                0: (False, False, False),
+                1: (True, False, False),
+                2: (True, True, False),
+                3: (True, True, True),
+                4: (True, True, True),
+            }
+            expected = defaults.get(idx)
+            if expected is not None and expected == (adv, nulls, qpc):
+                humanization_status_var.set(f"Current: {HUMANIZATION_LABELS[idx]}")
+            else:
+                humanization_status_var.set("Current: Custom")
+
         def update_humanization_label(val: float) -> None:
-            idx = min(4, max(0, int(round(val))))
-            humanization_status_var.set(f"Current: {HUMANIZATION_LABELS[idx]}")
+            _update_humanization_status()
 
         ctk.CTkLabel(s, text="Humanization intensity: Low / Medium / High / Paranoid").pack(anchor="w", pady=(8, 2))
         intensity_slider = ctk.CTkSlider(s, from_=0, to=4, number_of_steps=4, width=200,
                                           command=update_humanization_label)
         intensity_slider.set(self._settings.get("humanization_intensity", 0))
         intensity_slider.pack(anchor="w", pady=2)
-        update_humanization_label(intensity_slider.get())
         ctk.CTkLabel(s, textvariable=humanization_status_var, font=ctk.CTkFont(size=12)).pack(anchor="w", padx=0, pady=(0, 4))
         insert_nulls_cb = ctk.CTkCheckBox(s, text="Insert 1–2 null SendInput between events (pattern break)")
         insert_nulls_cb.pack(anchor="w", pady=4)
@@ -1250,6 +1325,7 @@ class AppGui:
                 color = "#00FF9D" if on else "#FF2D55"
                 if i < len(humanization_feature_labels):
                     humanization_feature_labels[i].configure(text_color=color)
+            _update_humanization_status()
 
         for feat_name, _ in HUMANIZATION_FEATURES:
             lbl = ctk.CTkLabel(humanization_frame, text=f"• {feat_name}", font=ctk.CTkFont(size=12))
@@ -1272,7 +1348,6 @@ class AppGui:
 
         def save_settings_cb() -> None:
             try:
-                self._settings["theme"] = theme_combo.get()
                 self._settings["randomize_time_ms_min"] = int(rmin.get().strip() or 5)
                 self._settings["randomize_time_ms_max"] = int(rmax.get().strip() or 15)
                 self._settings["randomize_mouse_px_min"] = int(pxmin.get().strip() or 1)
@@ -1287,8 +1362,7 @@ class AppGui:
                 self._settings["run_on_startup"] = run_startup.get()
                 self._settings["macros_dir_override"] = path_entry.get().strip()
                 self._settings["always_on_top"] = self._always_on_top_var.get() if self._always_on_top_var else False
-                self._settings["window_transparency"] = round(settings_transparency_slider.get(), 2)
-                self._settings["antidetect_profile"] = profile_combo.get().lower()
+                self._settings["window_transparency"] = float(self._window_transparency)
                 self._settings["advanced_humanization_enabled"] = adv_human.get()
                 self._settings["humanization_intensity"] = int(round(intensity_slider.get()))
                 self._settings["insert_nulls"] = insert_nulls_cb.get()
@@ -1300,7 +1374,6 @@ class AppGui:
             settings_manager.save_settings(self._settings)
             config.update_from_settings(self._settings)
             self._apply_window_title()
-            ctk.set_appearance_mode(self._settings["theme"])
             self._apply_macros_dir_override()
             self._update_always_on_top()
             self._window_transparency = self._settings["window_transparency"]
@@ -1316,7 +1389,7 @@ class AppGui:
         # --- About ---
         ctk.CTkLabel(s, text="About", font=ctk.CTkFont(weight="bold", size=14)).pack(anchor="w", pady=(16, 8))
         ctk.CTkLabel(s, text=f"{config.APP_NAME}  v{config.APP_VERSION}", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(0, 4))
-        ctk.CTkLabel(s, text="Professional macro recorder & playback with Quick Actions (key spammer, auto-clicker).").pack(anchor="w", pady=(0, 8))
+        ctk.CTkLabel(s, text="Professional macro recorder & playback with Key Presser and Mouse Clicker.").pack(anchor="w", pady=(0, 8))
 
     def _build_status_bar(self) -> None:
         bar = ctk.CTkFrame(self._root, fg_color=COLOR_CARD, corner_radius=6, height=36)

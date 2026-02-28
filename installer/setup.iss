@@ -1,8 +1,8 @@
 ; Inno Setup 6 script for ReRe
 ; Optional: Sign Setup.exe with a code-signing certificate (Signtool in Inno Setup or external)
 #define MyAppName "ReRe"
-#define MyAppVersion "1.0.0"
-#define MyAppPublisher "Solve4x"
+#define MyAppVersion "1.1.0"
+#define MyAppPublisher "Solve4x LLC"
 #define MyAppExeName "ReRe.exe"
 
 [Setup]
@@ -15,7 +15,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 ; OutputDir relative to this .iss -> installer\Output\ReRe_Setup_v1.0.exe
 OutputDir=Output
-OutputBaseFilename=ReRe_Setup_v1.0
+OutputBaseFilename=ReRe_Setup_v1.1
 Compression=lzma2
 SolidCompression=yes
 PrivilegesRequired=admin

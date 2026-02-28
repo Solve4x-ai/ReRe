@@ -7,7 +7,7 @@ import os
 
 # --- Application ---
 APP_NAME = "ReRe"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 
 # --- Storage ---
 APPDATA_DIR = os.path.join(os.getenv("APPDATA", ""), "ReRe")

@@ -48,6 +48,7 @@ class PlaybackController:
         self._mouse_clicker_thread: threading.Thread | None = None
         self._live_event_callback: Callable[[dict], None] | None = None
         self._last_key_interval_ms: float | None = None
+        self._last_key_execution_time: float | None = None  # perf_counter() when last key tap was sent
         self._last_mouse_interval_ms: float | None = None
 
     def get_state(self) -> str:
@@ -185,6 +186,7 @@ class PlaybackController:
                     break
                 input_backend.key_down(sc)
                 input_backend.key_up(sc)
+                self._last_key_execution_time = time.perf_counter()
                 n += 1
                 jitter_ms = utils.randomize_time_ms() if randomize else 0.0
                 # Never reduce below the base interval
@@ -214,9 +216,14 @@ class PlaybackController:
         self._key_spam_thread = None
         self._key_spam_stop.clear()
         self._last_key_interval_ms = None
+        self._last_key_execution_time = None
 
     def get_last_key_interval_ms(self) -> float | None:
         return self._last_key_interval_ms
+
+    def get_last_key_execution_time(self) -> float | None:
+        """Monotonic time (perf_counter) when the last key tap was sent; for GUI countdown progress."""
+        return self._last_key_execution_time
 
     def is_key_spammer_running(self) -> bool:
         return self._key_spam_thread is not None and self._key_spam_thread.is_alive()
