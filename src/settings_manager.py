@@ -36,6 +36,7 @@ DEFAULTS = {
     "use_qpc_time": False,
     "obfuscate_process_name": False,
     "generic_window_title": "",
+    "color_profile": "green",
 }
 
 # Anti-detection profile presets (applied when profile changes to non-Custom)

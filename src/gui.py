@@ -73,6 +73,19 @@ from src import settings_manager
 COLOR_ACCENT = "#00FF9D"
 COLOR_DANGER = "#FF2D55"
 COLOR_CARD = ("#E8E8E8", "#2A2A2A")  # light mode, dark mode
+
+# Preset color profiles (accent color); key = settings["color_profile"]
+COLOR_PROFILES = {
+    "green": ("#00FF9D", "#00CC7D"),
+    "blue": ("#00A2FF", "#0080CC"),
+    "purple": ("#B366FF", "#8C52CC"),
+    "amber": ("#FFB020", "#CC8C1A"),
+}
+
+
+def _accent_text_color(profile_id: str) -> str:
+    """Text color on accent buttons (black for light accents, white for dark)."""
+    return "#000" if profile_id in ("green", "amber") else "#fff"
 COLOR_BORDER = ("#ccc", "#333")
 MIN_WIDTH = 616   # ~33% narrower than original 920
 MIN_HEIGHT = 700
@@ -108,6 +121,7 @@ class AppGui:
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("green")
         self._root = ctk.CTk()
+        self._root.attributes("-topmost", False)
         self._apply_window_title()
         self._root.minsize(MIN_WIDTH, MIN_HEIGHT)
         self._root.geometry(f"{MIN_WIDTH}x{MIN_HEIGHT}")
@@ -124,6 +138,7 @@ class AppGui:
         self._set_window_icon()
         self._root.bind("<Configure>", self._on_configure)
         self._apply_initial_transparency()
+        self._apply_color_profile()
 
     def _on_configure(self, event) -> None:
         """Trigger a redraw only when the window is resized to avoid ghosting and drag jitter."""
@@ -333,19 +348,20 @@ class AppGui:
             self._toolbar_profile_combo.set("No profiles")
         self._toolbar_profile_combo.pack(side="right", padx=8, pady=10)
 
+        self._toolbar_save_btn = ctk.CTkButton(
+            toolbar, text="Save", width=70, height=28,
+            fg_color=COLOR_ACCENT, text_color="#000",
+            command=self._handle_toolbar_save_profile,
+        )
+        self._toolbar_save_btn.pack(side="right", padx=4, pady=10)
+        if not profile_names:
+            self._toolbar_save_btn.configure(state="disabled")
+
         self._always_on_top_var = ctk.BooleanVar(value=bool(self._settings.get("always_on_top", False)))
-        always_on_top_cb = ctk.CTkCheckBox(
+        self._always_on_top_cb = ctk.CTkCheckBox(
             toolbar, text="Always on top", variable=self._always_on_top_var, command=self._on_always_on_top_changed
         )
-        always_on_top_cb.pack(side="right", padx=8, pady=10)
-
-        stop_btn = ctk.CTkButton(
-            toolbar, text="EMERGENCY STOP", fg_color=COLOR_DANGER, hover_color="#CC2244",
-            font=ctk.CTkFont(size=12, weight="bold"), command=self._handle_emergency_stop,
-            width=140, height=32
-        )
-        stop_btn.pack(side="right", padx=12, pady=10)
-        stop_btn.configure(cursor="hand2")
+        self._always_on_top_cb.pack(side="right", padx=8, pady=10)
 
         win_row = ctk.CTkFrame(self._root, fg_color="transparent")
         win_row.pack(fill="x", padx=10, pady=(0, 4))
@@ -364,6 +380,117 @@ class AppGui:
         self._transparency_label.pack(side="left", padx=(0, 16))
         self._on_transparency_changed(self._transparency_slider.get())
 
+    def _handle_toolbar_save_profile(self) -> None:
+        """Overwrite current profile with current settings (no need to open Settings tab)."""
+        name = getattr(self, "_current_profile", None) or (getattr(self, "_toolbar_profile_combo", None) and self._toolbar_profile_combo.get())
+        if not name or name == "No profiles" or name not in getattr(self, "_profiles", {}):
+            return
+        snapshot = {
+            "settings": dict(self._settings),
+            "quick_actions": self._collect_quick_actions_state(),
+        }
+        self._profiles[name] = snapshot
+        profile_manager.save_profiles(self._profiles)
+
+    def _on_color_profile_selected(self, profile_id: str) -> None:
+        if profile_id not in COLOR_PROFILES:
+            return
+        self._settings["color_profile"] = profile_id
+        settings_manager.save_settings(self._settings)
+        self._apply_color_profile()
+        for pid, btn in getattr(self, "_color_profile_buttons", []):
+            fg, hover = COLOR_PROFILES.get(pid, (COLOR_ACCENT, "#00CC7D"))
+            if pid == profile_id:
+                btn.configure(fg_color=fg, hover_color=hover, text_color="#000" if pid in ("green", "amber") else "#fff")
+            else:
+                btn.configure(fg_color="#3a3a3a", hover_color=hover, text_color="#fff")
+
+    def _get_accent_colors(self) -> tuple[str, str, str]:
+        """Return (fg, hover, text_on_accent) for current color profile."""
+        profile_id = self._settings.get("color_profile", "green")
+        fg, hover = COLOR_PROFILES.get(profile_id, (COLOR_ACCENT, "#00CC7D"))
+        return fg, hover, _accent_text_color(profile_id)
+
+    def _apply_color_profile(self) -> None:
+        """Apply accent color from current color profile to all accent widgets."""
+        profile_id = self._settings.get("color_profile", "green")
+        fg, hover = COLOR_PROFILES.get(profile_id, (COLOR_ACCENT, "#00CC7D"))
+        text_on_accent = _accent_text_color(profile_id)
+        try:
+            if getattr(self, "_tabview", None):
+                self._tabview.configure(segmented_button_selected_color=fg, segmented_button_selected_hover_color=hover)
+            if getattr(self, "_state_badge", None):
+                self._state_badge.configure(text_color=fg)
+            if getattr(self, "_toolbar_save_btn", None):
+                self._toolbar_save_btn.configure(fg_color=fg, hover_color=hover, text_color=text_on_accent)
+            if getattr(self, "_always_on_top_cb", None):
+                self._always_on_top_cb.configure(fg_color=fg, hover_color=hover)
+            if getattr(self, "_transparency_slider", None):
+                self._transparency_slider.configure(progress_color=fg, button_color=fg, button_hover_color=hover)
+            if getattr(self, "_key_countdown_bar", None):
+                self._key_countdown_bar.configure(progress_color=fg)
+            if getattr(self, "_human_labels", None):
+                for lbl in self._human_labels.values():
+                    lbl.configure(text_color=fg)
+            if getattr(self, "_quick_key_display", None):
+                self._quick_key_display.configure(fg_color=fg, hover_color=hover, text_color=text_on_accent)
+            if getattr(self, "_quick_tap_hold", None):
+                self._quick_tap_hold.configure(selected_color=fg, selected_hover_color=hover)
+            if getattr(self, "_quick_key_interval_slider", None):
+                self._quick_key_interval_slider.configure(progress_color=fg, button_color=fg, button_hover_color=hover)
+            if getattr(self, "_quick_key_count_infinite", None):
+                self._quick_key_count_infinite.configure(fg_color=fg, hover_color=hover)
+            if getattr(self, "_quick_key_interval_display", None):
+                self._quick_key_interval_display.configure(text_color=fg)
+            if getattr(self, "_quick_speed", None):
+                self._quick_speed.configure(progress_color=fg, button_color=fg, button_hover_color=hover)
+            if getattr(self, "_quick_randomize", None):
+                self._quick_randomize.configure(fg_color=fg, hover_color=hover)
+            if getattr(self, "_quick_key_toggle_btn", None):
+                if "Stop" not in (self._quick_key_toggle_btn.cget("text") or ""):
+                    self._quick_key_toggle_btn.configure(fg_color=fg, hover_color=hover, text_color=text_on_accent)
+            if getattr(self, "_quick_mouse_btn", None):
+                self._quick_mouse_btn.configure(selected_color=fg, selected_hover_color=hover)
+            if getattr(self, "_quick_mouse_single_repeat", None):
+                self._quick_mouse_single_repeat.configure(selected_color=fg, selected_hover_color=hover)
+            if getattr(self, "_quick_mouse_interval_slider", None):
+                self._quick_mouse_interval_slider.configure(progress_color=fg, button_color=fg, button_hover_color=hover)
+            if getattr(self, "_quick_mouse_count_infinite", None):
+                self._quick_mouse_count_infinite.configure(fg_color=fg, hover_color=hover)
+            if getattr(self, "_quick_mouse_interval_display", None):
+                self._quick_mouse_interval_display.configure(text_color=fg)
+            if getattr(self, "_quick_mouse_toggle_btn", None):
+                if "Stop" not in (self._quick_mouse_toggle_btn.cget("text") or ""):
+                    self._quick_mouse_toggle_btn.configure(fg_color=fg, hover_color=hover, text_color=text_on_accent)
+            if getattr(self, "_btn_record", None):
+                self._btn_record.configure(fg_color=fg, hover_color=hover, text_color=text_on_accent)
+            if getattr(self, "_btn_save_macro", None):
+                self._btn_save_macro.configure(fg_color=fg, hover_color=hover, text_color=text_on_accent)
+            if getattr(self, "_btn_library_play", None):
+                self._btn_library_play.configure(fg_color=fg, hover_color=hover, text_color=text_on_accent)
+            if getattr(self, "_btn_save_settings", None):
+                self._btn_save_settings.configure(fg_color=fg, hover_color=hover, text_color=text_on_accent)
+            if getattr(self, "_btn_profile_save_as", None):
+                self._btn_profile_save_as.configure(fg_color=fg, hover_color=hover, text_color=text_on_accent)
+            if getattr(self, "_btn_profile_overwrite", None):
+                self._btn_profile_overwrite.configure(fg_color=fg, hover_color=hover, text_color=text_on_accent)
+            for btn in getattr(self, "_settings_record_key_buttons", []):
+                btn.configure(fg_color=fg, hover_color=hover, text_color=text_on_accent)
+            if getattr(self, "_adv_human_cb", None):
+                self._adv_human_cb.configure(fg_color=fg, hover_color=hover)
+            if getattr(self, "_intensity_slider", None):
+                self._intensity_slider.configure(progress_color=fg, button_color=fg, button_hover_color=hover)
+            if getattr(self, "_insert_nulls_cb", None):
+                self._insert_nulls_cb.configure(fg_color=fg, hover_color=hover)
+            if getattr(self, "_use_qpc_cb", None):
+                self._use_qpc_cb.configure(fg_color=fg, hover_color=hover)
+            if getattr(self, "_obfuscate_cb", None):
+                self._obfuscate_cb.configure(fg_color=fg, hover_color=hover)
+            if callable(getattr(self, "_update_humanization_features_cb", None)):
+                self._update_humanization_features_cb()
+        except Exception:
+            pass
+
     def _on_always_on_top_changed(self) -> None:
         self._settings["always_on_top"] = bool(self._always_on_top_var.get())
         self._update_always_on_top()
@@ -379,73 +506,68 @@ class AppGui:
             self._transparency_label.configure(text=f"{pct}%")
 
     def _build_tabs(self) -> None:
-        tabview = ctk.CTkTabview(self._root, fg_color=COLOR_CARD, corner_radius=8)
-        tabview.pack(fill="both", expand=True, padx=10, pady=6)
+        self._tabview = ctk.CTkTabview(self._root, fg_color=COLOR_CARD, corner_radius=8)
+        self._tabview.pack(fill="both", expand=True, padx=10, pady=6)
 
-        tabview.add("Key Presser")
-        tabview.add("Mouse Clicker")
-        tabview.add("Macro Recorder")
-        tabview.add("Macro Library")
-        tabview.add("Settings")
-        tabview.set("Key Presser")
+        self._tabview.add("Key Presser")
+        self._tabview.add("Mouse Clicker")
+        self._tabview.add("Macro Recorder")
+        self._tabview.add("Macro Library")
+        self._tabview.add("Settings")
+        self._tabview.set("Key Presser")
 
-        self._build_key_presser_tab(tabview.tab("Key Presser"))
-        self._build_mouse_clicker_tab(tabview.tab("Mouse Clicker"))
-        self._build_recorder_tab(tabview.tab("Macro Recorder"))
-        self._build_library_tab(tabview.tab("Macro Library"))
-        self._build_settings_tab(tabview.tab("Settings"))
+        self._build_key_presser_tab(self._tabview.tab("Key Presser"))
+        self._build_mouse_clicker_tab(self._tabview.tab("Mouse Clicker"))
+        self._build_recorder_tab(self._tabview.tab("Macro Recorder"))
+        self._build_library_tab(self._tabview.tab("Macro Library"))
+        self._build_settings_tab(self._tabview.tab("Settings"))
 
     def _build_key_presser_tab(self, parent: ctk.CTkFrame) -> None:
-        # Top row: global options (always visible without expanding window)
+        # Top row: global options
         shared = ctk.CTkFrame(parent, fg_color="transparent")
         shared.pack(fill="x", padx=10, pady=(10, 6))
         self._quick_randomize = ctk.CTkCheckBox(shared, text="Global randomization (micro-jitter)")
         self._quick_randomize.pack(side="left", padx=(0, 20))
-        ctk.CTkLabel(shared, text="Macro playback speed (0.5×–3×):", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 6))
-        self._quick_speed = ctk.CTkSlider(shared, from_=0.5, to=3.0, number_of_steps=25, width=140)
-        self._quick_speed.set(1.0)
-        self._quick_speed.pack(side="left", padx=6)
-        self._quick_speed_label = ctk.CTkLabel(shared, text="1.0×", font=ctk.CTkFont(size=12, weight="bold"), width=36)
-        self._quick_speed_label.pack(side="left", padx=(0, 16))
 
-        def on_speed_changed(v: float) -> None:
-            if getattr(self, "_quick_speed_label", None):
-                self._quick_speed_label.configure(text=f"{v:.1f}×")
+        # Two-column layout: left = Key Presser card, right = Humanization (last applied)
+        content_row = ctk.CTkFrame(parent, fg_color="transparent")
+        content_row.pack(fill="both", expand=True, padx=10, pady=6)
 
-        self._quick_speed.configure(command=on_speed_changed)
-        on_speed_changed(1.0)
-
-        # Key Presser card (single column on this tab)
-        key_frame = ctk.CTkFrame(parent, fg_color=COLOR_CARD, corner_radius=8, border_width=1, border_color="#333")
-        key_frame.pack(fill="x", padx=10, pady=6)
+        key_frame = ctk.CTkFrame(content_row, fg_color=COLOR_CARD, corner_radius=8, border_width=1, border_color="#333")
+        key_frame.pack(side="left", fill="both", expand=True, padx=(0, 8))
         ctk.CTkLabel(key_frame, text="Key Presser", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=12, pady=(12, 6))
 
         self._key_names = sorted(
             config.SCAN_CODES.keys(),
             key=lambda x: (x not in ["space", "enter", "shift", "ctrl", "alt"], x),
         )
-        key_row = ctk.CTkFrame(key_frame, fg_color="transparent")
-        key_row.pack(anchor="w", padx=12, pady=4)
+        key_selector_row = ctk.CTkFrame(key_frame, fg_color="transparent")
+        key_selector_row.pack(fill="x", padx=12, pady=4)
+        key_row = ctk.CTkFrame(key_selector_row, fg_color="transparent")
+        key_row.pack(side="left")
         ctk.CTkLabel(key_row, text="Key:", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 6))
         self._quick_key_display = ctk.CTkButton(
             key_row,
             text=f"{self._quick_key_selected} ▾",
-            width=140,
+            width=100,
             command=self._toggle_key_dropdown,
         )
         self._quick_key_display.pack(side="left")
 
-        # Inline dropdown container (initially hidden)
+        # Inline dropdown to the right of the button (uses empty space, avoids bottom cut-off)
         self._key_dropdown_container = ctk.CTkFrame(
-            key_frame, fg_color=COLOR_CARD, corner_radius=6, border_width=1, border_color="#333"
+            key_selector_row, fg_color=COLOR_CARD, corner_radius=6, border_width=1, border_color="#333", width=160, height=140
         )
-        dropdown_sf = ctk.CTkScrollableFrame(self._key_dropdown_container, width=200, height=180, fg_color="transparent")
+        self._key_dropdown_container.pack_propagate(False)
+        dropdown_sf = ctk.CTkScrollableFrame(self._key_dropdown_container, width=152, height=132, fg_color="transparent")
         dropdown_sf.pack(fill="both", expand=True, padx=4, pady=4)
         for name in self._key_names:
             btn = ctk.CTkButton(
                 dropdown_sf,
                 text=name,
-                width=180,
+                width=140,
+                height=24,
+                font=ctk.CTkFont(size=11),
                 command=lambda n=name: self._select_key(n),
             )
             btn.pack(anchor="w", padx=2, pady=1)
@@ -474,8 +596,8 @@ class AppGui:
         self._restrict_entry_to_digits(key_count_entry)
 
         key_interval_display_var = ctk.StringVar(value="Last interval: — ms")
-        key_interval_display = ctk.CTkLabel(key_frame, textvariable=key_interval_display_var, font=ctk.CTkFont(size=13, weight="bold"), text_color="#00FF9D")
-        key_interval_display.pack(anchor="w", padx=12, pady=(4, 0))
+        self._quick_key_interval_display = ctk.CTkLabel(key_frame, textvariable=key_interval_display_var, font=ctk.CTkFont(size=13, weight="bold"), text_color=COLOR_ACCENT)
+        self._quick_key_interval_display.pack(anchor="w", padx=12, pady=(4, 0))
 
         # Countdown progress bar: fills as next key press approaches
         key_countdown_row = ctk.CTkFrame(key_frame, fg_color="transparent")
@@ -507,31 +629,27 @@ class AppGui:
         self._quick_key_toggle_btn = key_toggle_btn
         self._quick_key_interval_display_var = key_interval_display_var
 
-        # Humanization: last-applied values (real-time proof)
-        human_frame = ctk.CTkFrame(parent, fg_color=COLOR_CARD, corner_radius=8, border_width=1, border_color="#333")
-        human_frame.pack(fill="x", padx=10, pady=(8, 10))
-        ctk.CTkLabel(human_frame, text="Humanization (last applied)", font=ctk.CTkFont(weight="bold", size=12)).pack(anchor="w", padx=12, pady=(10, 6))
+        # Humanization (last applied): single column on the right
+        human_frame = ctk.CTkFrame(content_row, fg_color=COLOR_CARD, corner_radius=8, border_width=1, border_color="#333", width=180)
+        human_frame.pack(side="right", fill="y", padx=0)
+        human_frame.pack_propagate(False)
+        ctk.CTkLabel(human_frame, text="Humanization (last applied)", font=ctk.CTkFont(weight="bold", size=11)).pack(anchor="w", padx=10, pady=(10, 6))
         self._human_labels: dict[str, ctk.CTkLabel] = {}
-        for key, label_text in [
-            ("delay_jitter", "Gaussian delay jitter:"),
-            ("key_hold", "Variable key hold:"),
-            ("drift", "Session drift (±%):"),
-            ("micro_pause", "Micro-pauses:"),
-            ("insert_nulls", "Insert nulls:"),
-            ("qpc", "Use QPC time:"),
-        ]:
+        human_items = [
+            ("delay_jitter", "Delay jitter:"),
+            ("key_hold", "Key hold:"),
+            ("drift", "Drift:"),
+            ("micro_pause", "Micro-pause:"),
+            ("insert_nulls", "Nulls:"),
+            ("qpc", "QPC:"),
+        ]
+        for key, label_text in human_items:
             row = ctk.CTkFrame(human_frame, fg_color="transparent")
-            row.pack(fill="x", padx=12, pady=2)
-            ctk.CTkLabel(row, text=label_text, font=ctk.CTkFont(size=11), width=160, anchor="w").pack(side="left")
-            lbl = ctk.CTkLabel(row, text="—", font=ctk.CTkFont(size=11), text_color=COLOR_ACCENT)
+            row.pack(fill="x", padx=10, pady=2)
+            ctk.CTkLabel(row, text=label_text, font=ctk.CTkFont(size=10), width=85, anchor="w").pack(side="left")
+            lbl = ctk.CTkLabel(row, text="—", font=ctk.CTkFont(size=10), text_color=COLOR_ACCENT)
             lbl.pack(side="left")
             self._human_labels[key] = lbl
-        hint = ctk.CTkLabel(
-            human_frame,
-            text="Updated during macro playback when randomization and humanization are enabled.",
-            font=ctk.CTkFont(size=10),
-        )
-        hint.pack(anchor="w", padx=12, pady=(4, 8))
         self._poll_humanization_report()
 
     def _build_mouse_clicker_tab(self, parent: ctk.CTkFrame) -> None:
@@ -568,7 +686,8 @@ class AppGui:
         self._restrict_entry_to_digits(mouse_count_entry)
 
         mouse_interval_display_var = ctk.StringVar(value="Last interval: — ms")
-        ctk.CTkLabel(mouse_frame, textvariable=mouse_interval_display_var, font=ctk.CTkFont(size=13, weight="bold"), text_color="#00FF9D").pack(anchor="w", padx=12, pady=(4, 0))
+        self._quick_mouse_interval_display = ctk.CTkLabel(mouse_frame, textvariable=mouse_interval_display_var, font=ctk.CTkFont(size=13, weight="bold"), text_color=COLOR_ACCENT)
+        self._quick_mouse_interval_display.pack(anchor="w", padx=12, pady=(4, 0))
         mouse_toggle_btn = ctk.CTkButton(
             mouse_frame, text="Start Clicking", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000",
             command=self._toggle_mouse_clicker
@@ -735,14 +854,14 @@ class AppGui:
             self._start_key_spammer()
 
     def _toggle_key_dropdown(self) -> None:
-        """Show or hide the inline key selection dropdown."""
+        """Show or hide the inline key selection dropdown (opens to the right of the key button)."""
         if not getattr(self, "_key_dropdown_container", None):
             return
         try:
             if self._key_dropdown_container.winfo_ismapped():
                 self._key_dropdown_container.pack_forget()
             else:
-                self._key_dropdown_container.pack(anchor="w", padx=12, pady=(0, 4))
+                self._key_dropdown_container.pack(side="left", padx=(8, 0), fill="y")
         except Exception:
             pass
 
@@ -802,7 +921,8 @@ class AppGui:
     def _refresh_key_spammer_ui(self) -> None:
         if not self._controller.is_key_spammer_running() and getattr(self, "_quick_key_toggle_btn", None):
             btn = self._quick_key_toggle_btn
-            btn.configure(text="Start Spamming", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000")
+            fg, hover, text_on = self._get_accent_colors()
+            btn.configure(text="Start Spamming", fg_color=fg, hover_color=hover, text_color=text_on)
             if getattr(self, "_quick_key_interval_display_var", None):
                 self._quick_key_interval_display_var.set("Last interval: — ms")
             if getattr(self, "_key_countdown_progress_var", None) is not None:
@@ -812,7 +932,8 @@ class AppGui:
     def _stop_key_spammer(self) -> None:
         self._controller.stop_key_spammer()
         if getattr(self, "_quick_key_toggle_btn", None):
-            self._quick_key_toggle_btn.configure(text="Start Spamming", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000")
+            fg, hover, text_on = self._get_accent_colors()
+            self._quick_key_toggle_btn.configure(text="Start Spamming", fg_color=fg, hover_color=hover, text_color=text_on)
         if getattr(self, "_quick_key_interval_display_var", None):
             self._quick_key_interval_display_var.set("Last interval: — ms")
         if getattr(self, "_key_countdown_progress_var", None) is not None:
@@ -837,7 +958,8 @@ class AppGui:
     def _refresh_mouse_clicker_ui(self) -> None:
         if not self._controller.is_mouse_clicker_running() and getattr(self, "_quick_mouse_toggle_btn", None):
             btn = self._quick_mouse_toggle_btn
-            btn.configure(text="Start Clicking", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000")
+            fg, hover, text_on = self._get_accent_colors()
+            btn.configure(text="Start Clicking", fg_color=fg, hover_color=hover, text_color=text_on)
             if getattr(self, "_quick_mouse_interval_display_var", None):
                 self._quick_mouse_interval_display_var.set("Last interval: — ms")
             self._update_state_badge()
@@ -864,7 +986,8 @@ class AppGui:
     def _stop_mouse_clicker(self) -> None:
         self._controller.stop_mouse_clicker()
         if getattr(self, "_quick_mouse_toggle_btn", None):
-            self._quick_mouse_toggle_btn.configure(text="Start Clicking", fg_color=COLOR_ACCENT, hover_color="#00CC7D", text_color="#000")
+            fg, hover, text_on = self._get_accent_colors()
+            self._quick_mouse_toggle_btn.configure(text="Start Clicking", fg_color=fg, hover_color=hover, text_color=text_on)
         if getattr(self, "_quick_mouse_interval_display_var", None):
             self._quick_mouse_interval_display_var.set("Last interval: — ms")
         self._root.after(0, self._update_state_badge)
@@ -926,11 +1049,16 @@ class AppGui:
         }
         self._profiles[name] = snapshot
         profile_manager.save_profiles(self._profiles)
-        # Refresh combo values
+        # Refresh combo values (Settings and toolbar)
         names = sorted(self._profiles.keys())
         self._profile_combo.configure(values=names)
         self._profile_combo.set(name)
         self._current_profile = name
+        if getattr(self, "_toolbar_profile_combo", None):
+            self._toolbar_profile_combo.configure(values=names, state="readonly")
+            self._toolbar_profile_combo.set(name)
+        if getattr(self, "_toolbar_save_btn", None):
+            self._toolbar_save_btn.configure(state="normal")
 
     def _handle_profile_overwrite(self) -> None:
         name = getattr(self, "_current_profile", None) or (self._profile_combo.get() if hasattr(self, "_profile_combo") else None)
@@ -1011,7 +1139,8 @@ class AppGui:
         save_row.pack(fill="x", padx=12, pady=8)
         self._save_entry = ctk.CTkEntry(save_row, width=250, placeholder_text="Macro name")
         self._save_entry.pack(side="left", padx=(0, 8))
-        ctk.CTkButton(save_row, text="Save as…", fg_color=COLOR_ACCENT, text_color="#000", width=100, command=self._handle_save_macro_quick).pack(side="left")
+        self._btn_save_macro = ctk.CTkButton(save_row, text="Save as…", fg_color=COLOR_ACCENT, text_color="#000", width=100, command=self._handle_save_macro_quick)
+        self._btn_save_macro.pack(side="left")
 
         self._rec_border = rec
 
@@ -1033,9 +1162,30 @@ class AppGui:
         btn_row = ctk.CTkFrame(parent, fg_color="transparent")
         btn_row.pack(fill="x", padx=10, pady=8)
         ctk.CTkButton(btn_row, text="Load", width=90, command=self._handle_library_load).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(btn_row, text="Play", width=90, fg_color=COLOR_ACCENT, text_color="#000", command=self._handle_library_play).pack(side="left", padx=(0, 6))
+        self._btn_library_play = ctk.CTkButton(btn_row, text="Play", width=90, fg_color=COLOR_ACCENT, text_color="#000", command=self._handle_library_play)
+        self._btn_library_play.pack(side="left", padx=(0, 6))
         ctk.CTkButton(btn_row, text="Delete", width=90, fg_color=COLOR_DANGER, command=self._handle_library_delete).pack(side="left", padx=(0, 6))
         ctk.CTkButton(btn_row, text="Export", width=90, command=self._handle_library_export).pack(side="left")
+
+        # Macro playback speed (bottom card)
+        speed_card = ctk.CTkFrame(parent, fg_color=COLOR_CARD, corner_radius=8, border_width=1, border_color="#333")
+        speed_card.pack(fill="x", padx=10, pady=(0, 10))
+        speed_row = ctk.CTkFrame(speed_card, fg_color="transparent")
+        speed_row.pack(fill="x", padx=12, pady=10)
+        ctk.CTkLabel(speed_row, text="Macro playback speed (0.5×–3×):", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 8))
+        self._quick_speed = ctk.CTkSlider(speed_row, from_=0.5, to=3.0, number_of_steps=25, width=140)
+        self._quick_speed.set(float(self._settings.get("playback_speed", 1.0)))
+        self._quick_speed.pack(side="left", padx=4)
+        self._quick_speed_label = ctk.CTkLabel(speed_row, text="1.0×", font=ctk.CTkFont(size=12, weight="bold"), width=36)
+        self._quick_speed_label.pack(side="left", padx=(0, 8))
+
+        def on_speed_changed(v: float) -> None:
+            if getattr(self, "_quick_speed_label", None):
+                self._quick_speed_label.configure(text=f"{v:.1f}×")
+
+        self._quick_speed.configure(command=on_speed_changed)
+        on_speed_changed(self._quick_speed.get())
+
         self._refresh_library_list()
 
     def _refresh_library_list(self) -> None:
@@ -1155,13 +1305,32 @@ class AppGui:
         self._profile_combo.pack(side="left", padx=(0, 8))
         self._profile_combo.set(profile_names[0])
         self._current_profile = profile_names[0]
-        ctk.CTkButton(profiles_row, text="Save as…", width=90, command=self._handle_profile_save_as).pack(side="left", padx=2)
-        ctk.CTkButton(profiles_row, text="Overwrite", width=90, command=self._handle_profile_overwrite).pack(side="left", padx=2)
+        self._btn_profile_save_as = ctk.CTkButton(profiles_row, text="Save as…", width=90, fg_color=COLOR_ACCENT, text_color="#000", command=self._handle_profile_save_as)
+        self._btn_profile_save_as.pack(side="left", padx=2)
+        self._btn_profile_overwrite = ctk.CTkButton(profiles_row, text="Overwrite", width=90, fg_color=COLOR_ACCENT, text_color="#000", command=self._handle_profile_overwrite)
+        self._btn_profile_overwrite.pack(side="left", padx=2)
         ctk.CTkButton(profiles_row, text="Delete", width=90, fg_color=COLOR_DANGER, command=self._handle_profile_delete).pack(side="left", padx=2)
 
-        # --- Appearance ---
-        ctk.CTkLabel(s, text="Appearance", font=ctk.CTkFont(weight="bold", size=14)).pack(anchor="w", pady=(0, 8))
-        ctk.CTkLabel(s, text="(Always on top is on the main page.)", font=ctk.CTkFont(size=11)).pack(anchor="w", pady=(0, 12))
+        # --- Color profile ---
+        ctk.CTkLabel(s, text="Color profile", font=ctk.CTkFont(weight="bold", size=14)).pack(anchor="w", pady=(16, 6))
+        color_row = ctk.CTkFrame(s, fg_color="transparent")
+        color_row.pack(anchor="w", pady=(0, 12))
+        current_color = self._settings.get("color_profile", "green")
+        self._color_profile_buttons: list[tuple[str, ctk.CTkButton]] = []
+        for profile_id, (fg, hover) in COLOR_PROFILES.items():
+            is_current = profile_id == current_color
+            btn = ctk.CTkButton(
+                color_row,
+                text=profile_id.capitalize(),
+                width=72,
+                height=28,
+                fg_color=fg if is_current else "#3a3a3a",
+                hover_color=hover,
+                text_color="#000" if profile_id in ("green", "amber") else "#fff",
+                command=lambda p=profile_id: self._on_color_profile_selected(p),
+            )
+            btn.pack(side="left", padx=2)
+            self._color_profile_buttons.append((profile_id, btn))
 
         # --- Paths & startup ---
         ctk.CTkLabel(s, text="Paths & startup", font=ctk.CTkFont(weight="bold", size=14)).pack(anchor="w", pady=(16, 8))
@@ -1209,56 +1378,70 @@ class AppGui:
         start_rec_entry = ctk.CTkEntry(start_rec_row, width=180, placeholder_text="f9")
         start_rec_entry.insert(0, self._settings.get("start_recording_hotkey", "f9"))
         start_rec_entry.pack(side="left", padx=(0, 8))
-        ctk.CTkButton(start_rec_row, text="Record key", width=100,
-                      command=lambda: self._record_hotkey("Start recording", start_rec_entry)).pack(side="left")
+        self._settings_record_key_buttons: list[ctk.CTkButton] = []
+        _btn = ctk.CTkButton(start_rec_row, text="Record key", width=100, fg_color=COLOR_ACCENT, text_color="#000",
+                             command=lambda: self._record_hotkey("Start recording", start_rec_entry))
+        _btn.pack(side="left")
+        self._settings_record_key_buttons.append(_btn)
         ctk.CTkLabel(s, text="Stop recording hotkey", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(8, 4))
         stop_rec_row = ctk.CTkFrame(s, fg_color="transparent")
         stop_rec_row.pack(anchor="w", pady=2)
         stop_rec_entry = ctk.CTkEntry(stop_rec_row, width=180, placeholder_text="f10")
         stop_rec_entry.insert(0, self._settings.get("stop_recording_hotkey", "f10"))
         stop_rec_entry.pack(side="left", padx=(0, 8))
-        ctk.CTkButton(stop_rec_row, text="Record key", width=100,
-                      command=lambda: self._record_hotkey("Stop recording", stop_rec_entry)).pack(side="left")
+        _btn = ctk.CTkButton(stop_rec_row, text="Record key", width=100, fg_color=COLOR_ACCENT, text_color="#000",
+                             command=lambda: self._record_hotkey("Stop recording", stop_rec_entry))
+        _btn.pack(side="left")
+        self._settings_record_key_buttons.append(_btn)
         ctk.CTkLabel(s, text="Key Spammer start hotkey", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(12, 4))
         key_spam_start_row = ctk.CTkFrame(s, fg_color="transparent")
         key_spam_start_row.pack(anchor="w", pady=2)
         key_spammer_start_entry = ctk.CTkEntry(key_spam_start_row, width=180, placeholder_text="f7")
         key_spammer_start_entry.insert(0, self._settings.get("key_spammer_start_hotkey", "f7"))
         key_spammer_start_entry.pack(side="left", padx=(0, 8))
-        ctk.CTkButton(key_spam_start_row, text="Record key", width=100,
-                      command=lambda: self._record_hotkey("Key Spammer start", key_spammer_start_entry)).pack(side="left")
+        _btn = ctk.CTkButton(key_spam_start_row, text="Record key", width=100, fg_color=COLOR_ACCENT, text_color="#000",
+                             command=lambda: self._record_hotkey("Key Spammer start", key_spammer_start_entry))
+        _btn.pack(side="left")
+        self._settings_record_key_buttons.append(_btn)
         ctk.CTkLabel(s, text="Key Spammer stop hotkey", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(8, 4))
         key_spam_stop_row = ctk.CTkFrame(s, fg_color="transparent")
         key_spam_stop_row.pack(anchor="w", pady=2)
         key_spammer_stop_entry = ctk.CTkEntry(key_spam_stop_row, width=180, placeholder_text="f8")
         key_spammer_stop_entry.insert(0, self._settings.get("key_spammer_stop_hotkey", "f8"))
         key_spammer_stop_entry.pack(side="left", padx=(0, 8))
-        ctk.CTkButton(key_spam_stop_row, text="Record key", width=100,
-                      command=lambda: self._record_hotkey("Key Spammer stop", key_spammer_stop_entry)).pack(side="left")
+        _btn = ctk.CTkButton(key_spam_stop_row, text="Record key", width=100, fg_color=COLOR_ACCENT, text_color="#000",
+                             command=lambda: self._record_hotkey("Key Spammer stop", key_spammer_stop_entry))
+        _btn.pack(side="left")
+        self._settings_record_key_buttons.append(_btn)
         ctk.CTkLabel(s, text="Mouse Clicker start hotkey", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(12, 4))
         mouse_start_row = ctk.CTkFrame(s, fg_color="transparent")
         mouse_start_row.pack(anchor="w", pady=2)
         mouse_clicker_start_entry = ctk.CTkEntry(mouse_start_row, width=180, placeholder_text="f5")
         mouse_clicker_start_entry.insert(0, self._settings.get("mouse_clicker_start_hotkey", "f5"))
         mouse_clicker_start_entry.pack(side="left", padx=(0, 8))
-        ctk.CTkButton(mouse_start_row, text="Record key", width=100,
-                      command=lambda: self._record_hotkey("Mouse Clicker start", mouse_clicker_start_entry)).pack(side="left")
+        _btn = ctk.CTkButton(mouse_start_row, text="Record key", width=100, fg_color=COLOR_ACCENT, text_color="#000",
+                             command=lambda: self._record_hotkey("Mouse Clicker start", mouse_clicker_start_entry))
+        _btn.pack(side="left")
+        self._settings_record_key_buttons.append(_btn)
         ctk.CTkLabel(s, text="Mouse Clicker stop hotkey", font=ctk.CTkFont(weight="bold")).pack(anchor="w", pady=(8, 4))
         mouse_stop_row = ctk.CTkFrame(s, fg_color="transparent")
         mouse_stop_row.pack(anchor="w", pady=2)
         mouse_clicker_stop_entry = ctk.CTkEntry(mouse_stop_row, width=180, placeholder_text="f6")
         mouse_clicker_stop_entry.insert(0, self._settings.get("mouse_clicker_stop_hotkey", "f6"))
         mouse_clicker_stop_entry.pack(side="left", padx=(0, 8))
-        ctk.CTkButton(mouse_stop_row, text="Record key", width=100,
-                      command=lambda: self._record_hotkey("Mouse Clicker stop", mouse_clicker_stop_entry)).pack(side="left")
+        _btn = ctk.CTkButton(mouse_stop_row, text="Record key", width=100, fg_color=COLOR_ACCENT, text_color="#000",
+                             command=lambda: self._record_hotkey("Mouse Clicker stop", mouse_clicker_stop_entry))
+        _btn.pack(side="left")
+        self._settings_record_key_buttons.append(_btn)
         ctk.CTkLabel(s, text="", height=0).pack(anchor="w", pady=(0, 8))
 
         # --- Anti-Detection / Humanization ---
         ctk.CTkLabel(s, text="Anti-Detection / Humanization", font=ctk.CTkFont(weight="bold", size=14)).pack(anchor="w", pady=(16, 8))
-        adv_human = ctk.CTkCheckBox(s, text="Enable Advanced Humanization (gaussian jitter, drift, micro-pauses)")
-        adv_human.pack(anchor="w", pady=4)
+        self._adv_human_cb = ctk.CTkCheckBox(s, text="Enable Advanced Humanization (gaussian jitter, drift, micro-pauses)")
+        self._adv_human_cb.pack(anchor="w", pady=4)
         if self._settings.get("advanced_humanization_enabled", True):
-            adv_human.select()
+            self._adv_human_cb.select()
+        adv_human = self._adv_human_cb
         humanization_status_var = ctk.StringVar(value="Current: Off")
         HUMANIZATION_LABELS = ("Off", "Low", "Medium", "High", "Paranoid")
 
@@ -1286,19 +1469,22 @@ class AppGui:
             _update_humanization_status()
 
         ctk.CTkLabel(s, text="Humanization intensity: Low / Medium / High / Paranoid").pack(anchor="w", pady=(8, 2))
-        intensity_slider = ctk.CTkSlider(s, from_=0, to=4, number_of_steps=4, width=200,
-                                          command=update_humanization_label)
-        intensity_slider.set(self._settings.get("humanization_intensity", 0))
-        intensity_slider.pack(anchor="w", pady=2)
+        self._intensity_slider = ctk.CTkSlider(s, from_=0, to=4, number_of_steps=4, width=200,
+                                               command=update_humanization_label)
+        self._intensity_slider.set(self._settings.get("humanization_intensity", 0))
+        self._intensity_slider.pack(anchor="w", pady=2)
+        intensity_slider = self._intensity_slider
         ctk.CTkLabel(s, textvariable=humanization_status_var, font=ctk.CTkFont(size=12)).pack(anchor="w", padx=0, pady=(0, 4))
-        insert_nulls_cb = ctk.CTkCheckBox(s, text="Insert 1–2 null SendInput between events (pattern break)")
-        insert_nulls_cb.pack(anchor="w", pady=4)
+        self._insert_nulls_cb = ctk.CTkCheckBox(s, text="Insert 1–2 null SendInput between events (pattern break)")
+        self._insert_nulls_cb.pack(anchor="w", pady=4)
         if self._settings.get("insert_nulls"):
-            insert_nulls_cb.select()
-        use_qpc_cb = ctk.CTkCheckBox(s, text="Use QueryPerformanceCounter in INPUT time field")
-        use_qpc_cb.pack(anchor="w", pady=4)
+            self._insert_nulls_cb.select()
+        insert_nulls_cb = self._insert_nulls_cb
+        self._use_qpc_cb = ctk.CTkCheckBox(s, text="Use QueryPerformanceCounter in INPUT time field")
+        self._use_qpc_cb.pack(anchor="w", pady=4)
         if self._settings.get("use_qpc_time"):
-            use_qpc_cb.select()
+            self._use_qpc_cb.select()
+        use_qpc_cb = self._use_qpc_cb
         HUMANIZATION_FEATURES = [
             ("Gaussian delay jitter", 1),
             ("Variable key hold", 1),
@@ -1322,7 +1508,8 @@ class AppGui:
                     on = qpc
                 else:
                     on = adv and intensity >= req
-                color = "#00FF9D" if on else "#FF2D55"
+                accent = COLOR_PROFILES.get(self._settings.get("color_profile", "green"), (COLOR_ACCENT,))[0]
+                color = accent if on else "#FF2D55"
                 if i < len(humanization_feature_labels):
                     humanization_feature_labels[i].configure(text_color=color)
             _update_humanization_status()
@@ -1332,15 +1519,17 @@ class AppGui:
             humanization_feature_labels.append(lbl)
             lbl.pack(anchor="w", padx=(0, 8), pady=1)
         humanization_frame.pack(anchor="w", pady=(4, 8))
+        self._update_humanization_features_cb = update_humanization_features
         update_humanization_features()
         intensity_slider.configure(command=lambda v: (update_humanization_label(v), update_humanization_features()))
         adv_human.configure(command=lambda: update_humanization_features())
         insert_nulls_cb.configure(command=update_humanization_features)
         use_qpc_cb.configure(command=update_humanization_features)
-        obfuscate_cb = ctk.CTkCheckBox(s, text="Obfuscate process name on launch (random generic title)")
-        obfuscate_cb.pack(anchor="w", pady=4)
+        self._obfuscate_cb = ctk.CTkCheckBox(s, text="Obfuscate process name on launch (random generic title)")
+        self._obfuscate_cb.pack(anchor="w", pady=4)
         if self._settings.get("obfuscate_process_name"):
-            obfuscate_cb.select()
+            self._obfuscate_cb.select()
+        obfuscate_cb = self._obfuscate_cb
         ctk.CTkLabel(s, text="Generic window title (overrides app name when set)").pack(anchor="w", pady=(8, 2))
         generic_title_entry = ctk.CTkEntry(s, width=300, placeholder_text="e.g. System Monitor")
         generic_title_entry.insert(0, self._settings.get("generic_window_title", ""))
@@ -1384,7 +1573,8 @@ class AppGui:
             self._on_settings_saved()
             self._set_status("Settings saved. Hotkeys updated.")
 
-        ctk.CTkButton(s, text="Save settings", fg_color=COLOR_ACCENT, text_color="#000", command=save_settings_cb).pack(anchor="w", pady=16)
+        self._btn_save_settings = ctk.CTkButton(s, text="Save settings", fg_color=COLOR_ACCENT, text_color="#000", command=save_settings_cb)
+        self._btn_save_settings.pack(anchor="w", pady=16)
 
         # --- About ---
         ctk.CTkLabel(s, text="About", font=ctk.CTkFont(weight="bold", size=14)).pack(anchor="w", pady=(16, 8))
@@ -1393,7 +1583,7 @@ class AppGui:
 
     def _build_status_bar(self) -> None:
         bar = ctk.CTkFrame(self._root, fg_color=COLOR_CARD, corner_radius=6, height=36)
-        bar.pack(fill="x", padx=10, pady=(6, 10))
+        bar.pack(fill="x", padx=10, pady=(6, 4))
         bar.pack_propagate(False)
         self._status_var = ctk.StringVar(value="")
         ctk.CTkLabel(bar, textvariable=self._status_var).pack(side="left", padx=12, pady=8)
@@ -1401,6 +1591,8 @@ class AppGui:
         self._progress_bar = ctk.CTkProgressBar(bar, variable=self._progress_var, width=200)
         self._progress_bar.pack(side="right", padx=12, pady=8)
         self._progress_bar.pack_forget()  # show only during playback
+        footer = ctk.CTkLabel(self._root, text="Created by: Solve4x", font=ctk.CTkFont(size=11))
+        footer.pack(pady=(0, 10))
 
     def _set_status(self, text: str) -> None:
         if self._status_var:
