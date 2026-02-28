@@ -434,6 +434,8 @@ class AppGui:
                     lbl.configure(text_color=fg)
             if getattr(self, "_quick_key_display", None):
                 self._quick_key_display.configure(fg_color=fg, hover_color=hover, text_color=text_on_accent)
+            for btn in getattr(self, "_key_dropdown_buttons", []):
+                btn.configure(fg_color=fg, hover_color=hover, text_color=text_on_accent)
             if getattr(self, "_quick_tap_hold", None):
                 self._quick_tap_hold.configure(selected_color=fg, selected_hover_color=hover)
             if getattr(self, "_quick_key_interval_slider", None):
@@ -561,6 +563,7 @@ class AppGui:
         self._key_dropdown_container.pack_propagate(False)
         dropdown_sf = ctk.CTkScrollableFrame(self._key_dropdown_container, width=152, height=132, fg_color="transparent")
         dropdown_sf.pack(fill="both", expand=True, padx=4, pady=4)
+        self._key_dropdown_buttons: list[ctk.CTkButton] = []
         for name in self._key_names:
             btn = ctk.CTkButton(
                 dropdown_sf,
@@ -571,6 +574,7 @@ class AppGui:
                 command=lambda n=name: self._select_key(n),
             )
             btn.pack(anchor="w", padx=2, pady=1)
+            self._key_dropdown_buttons.append(btn)
 
         tap_hold = ctk.CTkSegmentedButton(key_frame, values=["Tap", "Hold"])
         tap_hold.pack(anchor="w", padx=12, pady=4)
